@@ -1209,8 +1209,12 @@ if (
 
             if data_type in ["numeric", "ranking"]:
 
-                # 평가항목일 경우
-                if role == "평가항목":
+                # 필수 기준과 평가항목 모두
+                # 상대 비교 방향을 설정할 수 있음
+                if role in [
+                    "필수 기준",
+                    "평가항목"
+                ]:
 
                     direction_options = [
                         "높을수록 좋음",
@@ -1224,7 +1228,7 @@ if (
                     )
 
                     direction = st.selectbox(
-                        "평가 방향",
+                        "선호 방향",
                         direction_options,
                         index=direction_options.index(
                             current_direction
@@ -1233,8 +1237,8 @@ if (
                     )
 
 
-                # 필수 기준일 경우
-                elif role == "필수 기준":
+                # 필수 기준일 경우 추가로 허용조건 설정
+                if role == "필수 기준":
 
                     operator_options = [
                         "≤",
@@ -1242,9 +1246,10 @@ if (
                         "="
                     ]
 
-                    
                     current_operator = (
-                        existing_setting.get("constraint_operator")
+                        existing_setting.get(
+                            "constraint_operator"
+                        )
                         or "≤"
                     )
 
@@ -1257,9 +1262,10 @@ if (
                         key=f"criterion_operator_{index}"
                     )
 
-
                     current_constraint_value = (
-                        existing_setting.get("constraint_value")
+                        existing_setting.get(
+                            "constraint_value"
+                        )
                         or 0.0
                     )
 
@@ -1278,7 +1284,10 @@ if (
 
             else:
 
-                if role == "평가항목":
+                if role in [
+                    "필수 기준",
+                    "평가항목"
+                ]:
 
                     direction_options = [
                         "상 > 중 > 하",
@@ -1292,7 +1301,7 @@ if (
                     )
 
                     direction = st.selectbox(
-                        "평가 방향",
+                        "선호 방향",
                         direction_options,
                         index=direction_options.index(
                             current_direction
@@ -1301,11 +1310,11 @@ if (
                     )
 
 
-                elif role == "필수 기준":
+                if role == "필수 기준":
 
                     st.info(
-                        "정성형 필수 기준의 충족 조건은 "
-                        "다음 단계에서 설정합니다."
+                        "정성형 필수 기준의 허용조건 설정은 "
+                        "추후 확장합니다."
                     )
 
 
@@ -1993,6 +2002,494 @@ if (
 
     st.dataframe(
         styled_comparison_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # =========================================================
+# 7. 후보 특성 분석
+# =========================================================
+
+if (
+    "confirmed_results" in st.session_state
+    and st.session_state.confirmed_results
+    and "criterion_settings" in st.session_state
+    and st.session_state.criterion_settings
+):
+
+    st.subheader(
+        "7. 후보 특성 분석"
+    )
+
+    st.caption(
+        "종합점수를 산정하지 않고, "
+        "판단항목별 상대적 강점·약점과 기준 미충족 리스크를 분석합니다."
+    )
+
+
+    confirmed_results = (
+        st.session_state.confirmed_results
+    )
+
+    criterion_settings = (
+        st.session_state.criterion_settings
+    )
+
+
+    # -----------------------------------------------------
+    # 후보 목록
+    # -----------------------------------------------------
+
+    candidate_names = list(
+        dict.fromkeys(
+            result["candidate"]
+            for result in confirmed_results
+        )
+    )
+
+
+    # 후보별 분석결과 저장
+    candidate_analysis = {
+        candidate: {
+            "strengths": [],
+            "weaknesses": [],
+            "risks": []
+        }
+        for candidate in candidate_names
+    }
+
+
+    # -----------------------------------------------------
+    # 판단항목별 상대 강점 / 약점 분석
+    # -----------------------------------------------------
+
+    for criterion, setting in (
+        criterion_settings.items()
+    ):
+
+        direction = (
+            setting.get("direction")
+        )
+
+        data_type = (
+            setting.get("data_type")
+        )
+
+
+        # 선호 방향이 없는 항목은 상대비교하지 않음
+        if (
+            direction is None
+            or direction == "방향 없음"
+        ):
+
+            continue
+
+
+        criterion_results = [
+            result
+            for result in confirmed_results
+            if result["field"] == criterion
+        ]
+
+
+        # 후보가 2개 미만이면 비교 불가
+        if len(criterion_results) < 2:
+
+            continue
+
+
+        # =================================================
+        # 정량형
+        # =================================================
+
+        if data_type in [
+            "numeric",
+            "ranking"
+        ]:
+
+            numeric_values = {}
+
+
+            for result in criterion_results:
+
+                try:
+
+                    numeric_values[
+                        result["candidate"]
+                    ] = float(
+                        result["value"]
+                    )
+
+                except (
+                    ValueError,
+                    TypeError
+                ):
+
+                    pass
+
+
+            if len(numeric_values) < 2:
+
+                continue
+
+
+            values = list(
+                numeric_values.values()
+            )
+
+
+            # 모든 후보 값이 같으면
+            # 강점/약점으로 구분하지 않음
+            if max(values) == min(values):
+
+                continue
+
+
+            if direction == "높을수록 좋음":
+
+                best_value = max(values)
+                worst_value = min(values)
+
+
+            elif direction == "낮을수록 좋음":
+
+                best_value = min(values)
+                worst_value = max(values)
+
+
+            else:
+
+                continue
+
+
+            for candidate, value in (
+                numeric_values.items()
+            ):
+
+                if value == best_value:
+
+                    candidate_analysis[
+                        candidate
+                    ][
+                        "strengths"
+                    ].append(
+                        criterion
+                    )
+
+
+                if value == worst_value:
+
+                    candidate_analysis[
+                        candidate
+                    ][
+                        "weaknesses"
+                    ].append(
+                        criterion
+                    )
+
+
+        # =================================================
+        # 정성형
+        # =================================================
+
+        elif data_type == "qualitative":
+
+            if direction == "상 > 중 > 하":
+
+                qualitative_score = {
+                    "상": 3,
+                    "중": 2,
+                    "하": 1
+                }
+
+
+            elif direction == "하 > 중 > 상":
+
+                qualitative_score = {
+                    "하": 3,
+                    "중": 2,
+                    "상": 1
+                }
+
+
+            else:
+
+                continue
+
+
+            scored_values = {}
+
+
+            for result in criterion_results:
+
+                value = str(
+                    result["value"]
+                ).strip()
+
+
+                # 상/중/하 외 값은
+                # 임의 변환하지 않고 분석에서 제외
+                if value in qualitative_score:
+
+                    scored_values[
+                        result["candidate"]
+                    ] = qualitative_score[
+                        value
+                    ]
+
+
+            if len(scored_values) < 2:
+
+                continue
+
+
+            values = list(
+                scored_values.values()
+            )
+
+
+            if max(values) == min(values):
+
+                continue
+
+
+            best_value = max(values)
+            worst_value = min(values)
+
+
+            for candidate, value in (
+                scored_values.items()
+            ):
+
+                if value == best_value:
+
+                    candidate_analysis[
+                        candidate
+                    ][
+                        "strengths"
+                    ].append(
+                        criterion
+                    )
+
+
+                if value == worst_value:
+
+                    candidate_analysis[
+                        candidate
+                    ][
+                        "weaknesses"
+                    ].append(
+                        criterion
+                    )
+
+
+    # -----------------------------------------------------
+    # 필수 기준 미충족 리스크 분석
+    # -----------------------------------------------------
+
+    for criterion, setting in (
+        criterion_settings.items()
+    ):
+
+        if (
+            setting.get("role")
+            != "필수 기준"
+        ):
+
+            continue
+
+
+        data_type = (
+            setting.get("data_type")
+        )
+
+        operator = (
+            setting.get(
+                "constraint_operator"
+            )
+        )
+
+        constraint_value = (
+            setting.get(
+                "constraint_value"
+            )
+        )
+
+        unit = (
+            setting.get("unit")
+            or ""
+        )
+
+
+        # 현재는 정량형 필수 기준만 판정
+        if (
+            data_type
+            not in [
+                "numeric",
+                "ranking"
+            ]
+            or operator is None
+            or constraint_value is None
+        ):
+
+            continue
+
+
+        for result in confirmed_results:
+
+            if result["field"] != criterion:
+
+                continue
+
+
+            try:
+
+                actual_value = float(
+                    result["value"]
+                )
+
+                standard_value = float(
+                    constraint_value
+                )
+
+
+                if operator == "≤":
+
+                    satisfied = (
+                        actual_value
+                        <= standard_value
+                    )
+
+
+                elif operator == "≥":
+
+                    satisfied = (
+                        actual_value
+                        >= standard_value
+                    )
+
+
+                elif operator == "=":
+
+                    satisfied = (
+                        actual_value
+                        == standard_value
+                    )
+
+
+                else:
+
+                    continue
+
+
+                if not satisfied:
+
+                    displayed_value = (
+                        format_value(
+                            result["value"],
+                            result["unit"]
+                        )
+                    )
+
+
+                    if standard_value.is_integer():
+
+                        displayed_standard = int(
+                            standard_value
+                        )
+
+                    else:
+
+                        displayed_standard = (
+                            standard_value
+                        )
+
+
+                    risk_text = (
+                        f"{criterion}: "
+                        f"{displayed_value} "
+                        f"(기준 {operator} "
+                        f"{displayed_standard}{unit})"
+                    )
+
+
+                    candidate_analysis[
+                        result["candidate"]
+                    ][
+                        "risks"
+                    ].append(
+                        risk_text
+                    )
+
+
+            except (
+                ValueError,
+                TypeError
+            ):
+
+                pass
+
+
+    # -----------------------------------------------------
+    # 사용자 화면용 표 생성
+    # -----------------------------------------------------
+
+    analysis_rows = []
+
+
+    for candidate in candidate_names:
+
+        analysis = (
+            candidate_analysis[
+                candidate
+            ]
+        )
+
+
+        strengths_text = (
+            ", ".join(
+                analysis["strengths"]
+            )
+            if analysis["strengths"]
+            else "-"
+        )
+
+
+        weaknesses_text = (
+            ", ".join(
+                analysis["weaknesses"]
+            )
+            if analysis["weaknesses"]
+            else "-"
+        )
+
+
+        risks_text = (
+            " / ".join(
+                analysis["risks"]
+            )
+            if analysis["risks"]
+            else "없음"
+        )
+
+
+        analysis_rows.append(
+            {
+                "후보": candidate,
+                "상대적 강점": strengths_text,
+                "상대적 약점": weaknesses_text,
+                "기준 미충족 리스크": risks_text
+            }
+        )
+
+
+    analysis_df = pd.DataFrame(
+        analysis_rows
+    )
+
+
+    st.dataframe(
+        analysis_df,
         use_container_width=True,
         hide_index=True
     )
