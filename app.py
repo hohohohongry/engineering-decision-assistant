@@ -1432,17 +1432,139 @@ if (
 
     st.subheader("6. 후보 비교")
 
-    st.write(
-        "확정된 데이터를 기준으로 후보별 값을 비교합니다."
+    confirmed_results = (
+        st.session_state.confirmed_results
     )
 
-    st.caption(
-        "필수 기준 충족은 하늘색, 미충족은 빨간색으로 표시합니다."
+    criterion_settings = (
+        st.session_state.criterion_settings
     )
 
 
-    confirmed_results = st.session_state.confirmed_results
-    criterion_settings = st.session_state.criterion_settings
+    # -----------------------------------------------------
+    # 필수 기준 빠른 수정
+    # -----------------------------------------------------
+
+    required_criteria = [
+        criterion
+        for criterion, setting
+        in criterion_settings.items()
+        if setting.get("role") == "필수 기준"
+        and setting.get("data_type")
+        in ["numeric", "ranking"]
+    ]
+
+
+    if required_criteria:
+
+        st.markdown(
+            "#### 필수 기준 빠른 수정"
+        )
+
+
+        for index, criterion in enumerate(
+            required_criteria
+        ):
+
+            setting = (
+                criterion_settings[criterion]
+            )
+
+            unit = (
+                setting.get("unit")
+                or ""
+            )
+
+
+            criterion_column, operator_column, value_column, unit_column = (
+                st.columns(
+                    [2.5, 1, 2, 1]
+                )
+            )
+
+
+            # 판단항목 이름
+            criterion_column.write(
+                criterion
+            )
+
+
+            # 현재 기준 조건
+            current_operator = (
+                setting.get(
+                    "constraint_operator"
+                )
+                or "≤"
+            )
+
+
+            operator_options = [
+                "≤",
+                "≥",
+                "="
+            ]
+
+
+            new_operator = (
+                operator_column.selectbox(
+                    "조건",
+                    operator_options,
+                    index=operator_options.index(
+                        current_operator
+                    ),
+                    key=f"quick_operator_{criterion}",
+                    label_visibility="collapsed"
+                )
+            )
+
+
+            # 현재 기준값
+            current_value = (
+                setting.get(
+                    "constraint_value"
+                )
+            )
+
+
+            if current_value is None:
+
+                current_value = 0.0
+
+
+            new_value = (
+                value_column.number_input(
+                    "기준값",
+                    value=float(
+                        current_value
+                    ),
+                    key=f"quick_value_{criterion}",
+                    label_visibility="collapsed"
+                )
+            )
+
+
+            # 단위 표시
+            unit_column.write(
+                unit
+            )
+
+
+            # 변경된 값을 실제 판단기준 설정에 반영
+            st.session_state.criterion_settings[
+                criterion
+            ][
+                "constraint_operator"
+            ] = new_operator
+
+
+            st.session_state.criterion_settings[
+                criterion
+            ][
+                "constraint_value"
+            ] = new_value
+
+
+        st.divider()
 
 
     # -----------------------------------------------------
@@ -1452,46 +1574,62 @@ if (
     candidate_names = list(
         dict.fromkeys(
             result["candidate"]
-            for result in confirmed_results
+            for result
+            in confirmed_results
         )
     )
 
 
     # -----------------------------------------------------
-    # 평가항목 목록
+    # 판단항목 목록
     # -----------------------------------------------------
 
-    # 원래 항목 순서
     criterion_names = list(
         dict.fromkeys(
             result["field"]
-            for result in confirmed_results
+            for result
+            in confirmed_results
         )
     )
 
 
-    # 동일 조건일 때 기존 순서를 유지하기 위한 번호
+    # 기존 순서 저장
     original_order = {
         criterion: index
-        for index, criterion in enumerate(criterion_names)
+        for index, criterion
+        in enumerate(
+            criterion_names
+        )
     }
 
 
-    def criterion_sort_key(criterion):
+    # -----------------------------------------------------
+    # 사용자 우선순위에 따라 정렬
+    # -----------------------------------------------------
 
-        setting = criterion_settings.get(
-            criterion,
-            {}
+    def criterion_sort_key(
+        criterion
+    ):
+
+        setting = (
+            criterion_settings.get(
+                criterion,
+                {}
+            )
         )
 
         priority = (
-            setting.get("priority")
+            setting.get(
+                "priority"
+            )
             or 9999
         )
 
         return (
             priority,
-            original_order[criterion]
+            original_order[
+                criterion
+            ]
         )
 
 
@@ -1502,7 +1640,7 @@ if (
 
 
     # -----------------------------------------------------
-    # 비교표 데이터 생성
+    # 후보 비교표 생성
     # -----------------------------------------------------
 
     comparison_rows = []
@@ -1510,48 +1648,68 @@ if (
 
     for criterion in criterion_names:
 
-        setting = criterion_settings.get(
-            criterion,
-            {}
+        setting = (
+            criterion_settings.get(
+                criterion,
+                {}
+            )
         )
 
 
-        # 기본 행 이름
         row_label = criterion
 
 
-        # 필수 기준이면 조건까지 행 이름에 표시
-        if setting.get("role") == "필수 기준":
+        # 필수 기준이면
+        # 판단항목 이름 옆에 기준 표시
+        if (
+            setting.get("role")
+            == "필수 기준"
+        ):
 
-            operator = setting.get(
-                "constraint_operator"
+            operator = (
+                setting.get(
+                    "constraint_operator"
+                )
             )
 
-            constraint_value = setting.get(
-                "constraint_value"
+            constraint_value = (
+                setting.get(
+                    "constraint_value"
+                )
             )
 
-            unit = setting.get(
-                "unit"
+            unit = (
+                setting.get(
+                    "unit"
+                )
             )
 
 
             if (
                 operator is not None
-                and constraint_value is not None
+                and constraint_value
+                is not None
             ):
 
-                # 3.0 → 3으로 표시
-                if float(constraint_value).is_integer():
+                numeric_constraint = float(
+                    constraint_value
+                )
+
+
+                # 3.0 → 3
+                if (
+                    numeric_constraint
+                    .is_integer()
+                ):
 
                     displayed_constraint = int(
-                        constraint_value
+                        numeric_constraint
                     )
 
                 else:
 
                     displayed_constraint = (
-                        constraint_value
+                        numeric_constraint
                     )
 
 
@@ -1564,24 +1722,36 @@ if (
 
                 if unit:
 
-                    row_label += str(unit)
+                    row_label += (
+                        str(unit)
+                    )
 
 
         row_data = {
-            "판단항목(우선순위 높은 순)": row_label
+            "판단항목 (우선순위 높은 순)": (
+                row_label
+            )
         }
 
 
-        # 각 후보의 값을 같은 행에 배치
+        # 후보별 값 삽입
         for candidate in candidate_names:
 
             matching_result = next(
                 (
                     result
-                    for result in confirmed_results
+                    for result
+                    in confirmed_results
                     if (
-                        result["candidate"] == candidate
-                        and result["field"] == criterion
+                        result[
+                            "candidate"
+                        ]
+                        == candidate
+                        and
+                        result[
+                            "field"
+                        ]
+                        == criterion
                     )
                 ),
                 None
@@ -1590,14 +1760,22 @@ if (
 
             if matching_result:
 
-                row_data[candidate] = format_value(
-                    matching_result["value"],
-                    matching_result["unit"]
+                row_data[
+                    candidate
+                ] = format_value(
+                    matching_result[
+                        "value"
+                    ],
+                    matching_result[
+                        "unit"
+                    ]
                 )
 
             else:
 
-                row_data[candidate] = "-"
+                row_data[
+                    candidate
+                ] = "-"
 
 
         comparison_rows.append(
@@ -1611,10 +1789,12 @@ if (
 
 
     # -----------------------------------------------------
-    # 셀 색상 판단 함수
+    # 필수 기준 충족 여부 색상
     # -----------------------------------------------------
 
-    def color_comparison_cell(row):
+    def color_comparison_cell(
+        row
+    ):
 
         styles = [
             ""
@@ -1622,11 +1802,13 @@ if (
         ]
 
 
-        # 첫 번째 열은 평가항목 이름
-        row_label = row["판단항목(우선순위 높은 순)"]
+        row_label = (
+            row[
+                "판단항목 (우선순위 높은 순)"
+            ]
+        )
 
 
-        # 현재 행이 어떤 criterion인지 찾기
         current_criterion = None
 
 
@@ -1639,7 +1821,10 @@ if (
                 )
             ):
 
-                current_criterion = criterion
+                current_criterion = (
+                    criterion
+                )
+
                 break
 
 
@@ -1648,36 +1833,46 @@ if (
             return styles
 
 
-        setting = criterion_settings.get(
-            current_criterion,
-            {}
+        setting = (
+            criterion_settings.get(
+                current_criterion,
+                {}
+            )
         )
 
 
-        # 필수 기준이 아니면 색칠하지 않음
-        if setting.get("role") != "필수 기준":
-
-            return styles
-
-
-        operator = setting.get(
-            "constraint_operator"
-        )
-
-        constraint_value = setting.get(
-            "constraint_value"
-        )
-
-
+        # 필수 기준만 색상 적용
         if (
-            operator is None
-            or constraint_value is None
+            setting.get("role")
+            != "필수 기준"
         ):
 
             return styles
 
 
-        # 후보별 실제 내부값 확인
+        operator = (
+            setting.get(
+                "constraint_operator"
+            )
+        )
+
+        constraint_value = (
+            setting.get(
+                "constraint_value"
+            )
+        )
+
+
+        if (
+            operator is None
+            or constraint_value
+            is None
+        ):
+
+            return styles
+
+
+        # 후보별 충족 여부 판정
         for column_index, candidate in enumerate(
             candidate_names,
             start=1
@@ -1686,10 +1881,19 @@ if (
             matching_result = next(
                 (
                     result
-                    for result in confirmed_results
+                    for result
+                    in confirmed_results
                     if (
-                        result["candidate"] == candidate
-                        and result["field"]
+                        result[
+                            "candidate"
+                        ]
+                        == candidate
+
+                        and
+
+                        result[
+                            "field"
+                        ]
                         == current_criterion
                     )
                 ),
@@ -1705,7 +1909,9 @@ if (
             try:
 
                 actual_value = float(
-                    matching_result["value"]
+                    matching_result[
+                        "value"
+                    ]
                 )
 
                 standard_value = float(
@@ -1713,13 +1919,13 @@ if (
                 )
 
 
-                # 기준 충족 여부 판정
                 if operator == "≤":
 
                     satisfied = (
                         actual_value
                         <= standard_value
                     )
+
 
                 elif operator == "≥":
 
@@ -1728,12 +1934,14 @@ if (
                         >= standard_value
                     )
 
+
                 elif operator == "=":
 
                     satisfied = (
                         actual_value
                         == standard_value
                     )
+
 
                 else:
 
@@ -1743,7 +1951,9 @@ if (
                 # 충족 → 연한 하늘색
                 if satisfied:
 
-                    styles[column_index] = (
+                    styles[
+                        column_index
+                    ] = (
                         "background-color: #D9EEF7"
                     )
 
@@ -1751,7 +1961,9 @@ if (
                 # 미충족 → 연한 빨간색
                 else:
 
-                    styles[column_index] = (
+                    styles[
+                        column_index
+                    ] = (
                         "background-color: #F8D7DA"
                     )
 
