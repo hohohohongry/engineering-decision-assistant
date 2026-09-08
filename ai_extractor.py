@@ -115,6 +115,70 @@ class SuggestedEvidence(BaseModel):
     # UI에서 비슷한 정보를 묶어 보여주기 위한 대표 이름
     group_name: str
 
+# =========================================================
+# Suggested Evidence 2차 검수 Schema
+# =========================================================
+
+class SuggestedEvidenceReviewItem(BaseModel):
+
+    # 어떤 원본 suggested item을 검수한 결과인지
+    item_id: int
+
+    suggestion_type: Literal[
+        "existing_field",
+        "new_field",
+        "reference"
+    ]
+
+    # existing_field일 때만 기존 사용자 항목명
+    target_field: str | None
+
+    # 최종적으로 UI에서 묶어 보여줄 이름
+    group_name: str
+
+
+class SuggestedEvidenceReviewResponse(BaseModel):
+
+    reviewed_items: list[
+        SuggestedEvidenceReviewItem
+    ]
+
+# =========================================================
+# Requested Evidence 2차 검수 Schema
+# =========================================================
+
+class RequestedEvidenceReviewItem(BaseModel):
+
+    item_id: int
+
+    action: Literal[
+        "keep",
+        "rewrite",
+        "remove"
+    ]
+
+    corrected_value: Union[
+        float,
+        str,
+        None
+    ]
+
+    corrected_unit: str | None
+
+    corrected_data_type: Literal[
+        "numeric",
+        "qualitative",
+        "ranking"
+    ] | None
+
+    reason: str
+
+
+class RequestedEvidenceReviewResponse(BaseModel):
+
+    reviewed_items: list[
+        RequestedEvidenceReviewItem
+    ]
 
 class ExtractionResponse(BaseModel):
 
@@ -129,6 +193,819 @@ class ExtractionResponse(BaseModel):
         SuggestedEvidence
     ]
 
+# =========================================================
+# Suggested Evidence 2차 의미 검수
+# =========================================================
+
+def refine_suggested_evidence(
+    suggested_items,
+    selected_fields,
+    model="gpt-5.6-luna"
+):
+    """
+    1차 AI가 찾은 추가정보를 다시 검토해
+
+    - 기존 항목에 연결할 정보
+    - 진짜 새로운 비교항목
+    - 참고정보
+
+    로 한 번 더 정리한다.
+
+    원본 value / evidence / scope는 변경하지 않는다.
+    """
+
+    if not suggested_items:
+
+        return suggested_items
+
+
+    # =====================================================
+    # 사용자 기존 판단항목
+    # =====================================================
+
+    requested_fields_text = ", ".join(
+        selected_fields
+    )
+
+
+    # =====================================================
+    # 검수할 추가정보 목록 생성
+    # =====================================================
+
+    review_blocks = []
+
+
+    for item_id, item in enumerate(
+        suggested_items
+    ):
+
+        applies_to_text = (
+            ", ".join(
+                item.applies_to
+            )
+            if item.applies_to
+            else "-"
+        )
+
+
+        review_blocks.append(
+            f"""
+[ITEM {item_id}]
+
+Current suggested field:
+{item.suggested_field}
+
+Current classification:
+{item.suggestion_type}
+
+Current target field:
+{item.target_field}
+
+Current group name:
+{item.group_name}
+
+Scope:
+{item.scope}
+
+Applies to:
+{applies_to_text}
+
+Value:
+{item.value}
+
+Reason:
+{item.reason}
+
+Source evidence:
+{item.evidence}
+"""
+        )
+
+
+    review_text = "\n".join(
+        review_blocks
+    )
+
+
+    # =====================================================
+    # 2차 검수 지시
+    # =====================================================
+
+    review_instructions = """
+You are reviewing engineering information that was already
+extracted from a document.
+
+Do NOT extract new information.
+
+Do NOT modify:
+- the source evidence
+- the engineering value
+- candidate applicability
+- scope
+
+Your only task is to review how each suggested item should be
+classified for an engineering decision-support interface.
+
+
+=========================================================
+AVAILABLE CLASSIFICATIONS
+=========================================================
+
+1. existing_field
+
+Use this when the information can reasonably be evaluated
+under one of the USER REQUESTED FIELDS.
+
+Different wording does NOT mean a different criterion.
+
+Examples of information that may belong to an existing field:
+
+- a more specific aspect of that field
+- a benefit within that field
+- a disadvantage within that field
+- a risk within that field
+- a supporting fact for that field
+
+If existing_field:
+
+target_field MUST exactly match one USER REQUESTED FIELD.
+
+group_name MUST equal target_field.
+
+
+=========================================================
+
+2. new_field
+
+Use this ONLY when the information represents a genuinely
+separate engineering evaluation axis that is not reasonably
+covered by any USER REQUESTED FIELD.
+
+Ask:
+
+"Would an engineer need to evaluate this as a separate question
+even after considering all existing requested fields?"
+
+If the answer is NO, use existing_field instead.
+
+If new_field:
+
+target_field = null
+
+group_name must be a short, clear canonical criterion name.
+
+
+=========================================================
+
+3. reference
+
+Use this when the information is useful decision context but
+should not become a candidate comparison criterion.
+
+Examples:
+
+- common test conditions
+- environmental conditions
+- general requirements
+- shared constraints
+- background information
+
+If reference:
+
+target_field = null
+
+
+=========================================================
+IMPORTANT REVIEW RULES
+=========================================================
+
+Review ALL items together.
+
+Prefer a small number of meaningful criteria.
+
+Do NOT create a new criterion merely because the wording differs
+from an existing requested field.
+
+If several suggested items describe the same new decision axis,
+use the SAME group_name.
+
+If an item's current classification is already appropriate,
+keep it.
+
+Do not force unrelated information into an existing field.
+
+Return exactly ONE review result for each input ITEM.
+
+Preserve the original item_id exactly.
+"""
+
+
+    review_input = f"""
+USER REQUESTED FIELDS:
+
+{requested_fields_text}
+
+
+SUGGESTED ITEMS TO REVIEW:
+
+{review_text}
+"""
+
+
+    # =====================================================
+    # AI 호출
+    # =====================================================
+
+    try:
+
+        response = client.responses.parse(
+            model=model,
+            instructions=review_instructions,
+            input=review_input,
+            text_format=SuggestedEvidenceReviewResponse
+        )
+
+
+        parsed_review = (
+            response.output_parsed
+        )
+
+
+        if parsed_review is None:
+
+            return suggested_items
+
+
+    except Exception:
+
+        # 2차 검수에 실패하더라도
+        # 기존 추출 결과는 그대로 사용할 수 있게 함
+        return suggested_items
+
+
+    # =====================================================
+    # AI 검수결과 조회
+    # =====================================================
+
+    review_lookup = {
+        review.item_id: review
+
+        for review
+        in parsed_review.reviewed_items
+    }
+
+
+    # 사용자 항목 실제 표기 보존
+    selected_field_lookup = {
+        str(field).strip().casefold(): field
+
+        for field
+        in selected_fields
+    }
+
+
+    # =====================================================
+    # 기존 SuggestedEvidence에 검수 결과 반영
+    # =====================================================
+
+    for item_id, item in enumerate(
+        suggested_items
+    ):
+
+        review = (
+            review_lookup.get(
+                item_id
+            )
+        )
+
+
+        # AI가 특정 item을 누락했다면
+        # 기존 분류 그대로 유지
+        if review is None:
+
+            continue
+
+
+        # -------------------------------------------------
+        # global / context는 비교항목으로 만들지 않음
+        # -------------------------------------------------
+
+        if item.scope in [
+            "global",
+            "context"
+        ]:
+
+            item.suggestion_type = (
+                "reference"
+            )
+
+            item.target_field = None
+
+            if review.group_name.strip():
+
+                item.group_name = (
+                    review.group_name.strip()
+                )
+
+            continue
+
+
+        # -------------------------------------------------
+        # 기존 항목으로 연결
+        # -------------------------------------------------
+
+        if (
+            review.suggestion_type
+            == "existing_field"
+        ):
+
+            if not review.target_field:
+
+                continue
+
+
+            canonical_field = (
+                selected_field_lookup.get(
+                    str(
+                        review.target_field
+                    )
+                    .strip()
+                    .casefold()
+                )
+            )
+
+
+            # 사용자가 실제로 선택한 항목만 허용
+            if canonical_field is None:
+
+                continue
+
+
+            item.suggestion_type = (
+                "existing_field"
+            )
+
+            item.target_field = (
+                canonical_field
+            )
+
+            item.group_name = (
+                canonical_field
+            )
+
+
+        # -------------------------------------------------
+        # 새로운 비교 항목
+        # -------------------------------------------------
+
+        elif (
+            review.suggestion_type
+            == "new_field"
+        ):
+
+            item.suggestion_type = (
+                "new_field"
+            )
+
+            item.target_field = None
+
+
+            if review.group_name.strip():
+
+                item.group_name = (
+                    review.group_name.strip()
+                )
+
+
+        # -------------------------------------------------
+        # 참고정보
+        # -------------------------------------------------
+
+        elif (
+            review.suggestion_type
+            == "reference"
+        ):
+
+            item.suggestion_type = (
+                "reference"
+            )
+
+            item.target_field = None
+
+
+            if review.group_name.strip():
+
+                item.group_name = (
+                    review.group_name.strip()
+                )
+
+
+    return suggested_items
+
+# =========================================================
+# Requested Evidence 2차 의미 검수
+# =========================================================
+
+def refine_requested_evidence(
+    requested_items,
+    selected_fields,
+    model="gpt-5.6-luna"
+):
+    """
+    1차 추출 결과의 field와 value가
+    실제로 의미상 직접 연결되는지 다시 확인한다.
+
+    특히 주변에 존재하는 숫자를
+    잘못된 판단항목의 값으로 사용하는 오류를 방지한다.
+
+    원본 evidence / page / candidate / scope는 변경하지 않는다.
+    """
+
+    if not requested_items:
+
+        return requested_items
+
+
+    # =====================================================
+    # 검수 대상 구성
+    # =====================================================
+
+    review_blocks = []
+
+
+    for item_id, item in enumerate(
+        requested_items
+    ):
+
+        applies_to_text = (
+            ", ".join(
+                item.applies_to
+            )
+            if item.applies_to
+            else "-"
+        )
+
+
+        review_blocks.append(
+            f"""
+[ITEM {item_id}]
+
+Requested field:
+{item.field}
+
+Current value:
+{item.value}
+
+Current unit:
+{item.unit}
+
+Current data type:
+{item.data_type}
+
+Scope:
+{item.scope}
+
+Applies to:
+{applies_to_text}
+
+Source evidence:
+{item.evidence}
+
+Current reason:
+{item.reason}
+"""
+        )
+
+
+    review_text = "\n".join(
+        review_blocks
+    )
+
+
+    # =====================================================
+    # AI 검수 지시
+    # =====================================================
+
+    review_instructions = """
+You are validating engineering evidence that has already
+been extracted from a document.
+
+Do NOT search for new evidence.
+
+Do NOT change:
+
+- requested field
+- candidate applicability
+- scope
+- page
+- source evidence
+
+Your only task is to verify whether the CURRENT VALUE
+actually answers the REQUESTED FIELD.
+
+
+=========================================================
+CORE TEST
+=========================================================
+
+For every item ask:
+
+"Does this value directly describe or measure the requested field?"
+
+Do NOT accept a value merely because it appears in the same
+sentence, paragraph, table, or design option.
+
+
+=========================================================
+NUMERIC SEMANTIC ALIGNMENT
+=========================================================
+
+A numeric value may be used as numeric evidence ONLY when the
+number itself directly measures the requested field.
+
+Do NOT borrow a nearby number that measures a different
+engineering parameter.
+
+
+Example:
+
+Requested field:
+패키지 간섭
+
+Source evidence:
+"하네스 길이가 약 70 mm 증가하며,
+스포일러 내부 간섭 재검토가 필요하다."
+
+Incorrect:
+
+value = 70
+unit = "mm"
+data_type = "numeric"
+
+because 70 mm measures harness length increase,
+NOT package interference itself.
+
+Correct:
+
+value = "스포일러 내부 간섭 재검토 필요"
+unit = null
+data_type = "qualitative"
+
+
+However, if the requested field were:
+
+하네스 길이 증가
+
+then:
+
+value = 70
+unit = "mm"
+data_type = "numeric"
+
+would be valid.
+
+
+Another example:
+
+Requested field:
+원가
+
+Source evidence:
+"부품 수가 3개 증가하며 원가 증가가 우려된다."
+
+Do NOT use:
+
+value = 3
+
+as the cost value.
+
+The number 3 measures part-count increase,
+not cost.
+
+Use the explicit cost-related meaning instead:
+
+value = "원가 증가 우려"
+unit = null
+data_type = "qualitative"
+
+
+=========================================================
+ACTIONS
+=========================================================
+
+1. keep
+
+Use when the current value directly and correctly answers
+the requested field.
+
+For keep:
+
+corrected_value = null
+corrected_unit = null
+corrected_data_type = null
+
+
+=========================================================
+
+2. rewrite
+
+Use when the current value is not the best representation
+of the requested field, BUT the SAME supplied source evidence
+clearly contains another explicit fact that directly answers it.
+
+The rewritten value must be grounded ONLY in the supplied
+source evidence.
+
+Do NOT introduce engineering inference.
+
+Do NOT use outside knowledge.
+
+For rewrite:
+
+- corrected_value must contain the corrected value
+- corrected_unit must be the correct unit or null
+- corrected_data_type must be specified
+
+
+=========================================================
+
+3. remove
+
+Use when the supplied source evidence does NOT actually support
+the requested field.
+
+Use remove rather than forcing a neighboring fact into
+the requested field.
+
+
+=========================================================
+IMPORTANT
+=========================================================
+
+Do not change one requested field into another field.
+
+For example:
+
+If an item is requested as "패키지 간섭",
+do NOT rename it to "하네스 길이".
+
+The field belongs to the user's extraction request.
+
+You are only validating whether the evidence contains a valid
+value for that field.
+
+
+Do not convert qualitative statements into numeric values
+unless the number directly measures the requested concept.
+
+Do not infer causal relationships or performance effects.
+
+Return exactly ONE review result for every input ITEM.
+
+Preserve item_id exactly.
+"""
+
+
+    review_input = f"""
+USER REQUESTED FIELDS:
+
+{", ".join(selected_fields)}
+
+
+EXTRACTED ITEMS TO REVIEW:
+
+{review_text}
+"""
+
+
+    # =====================================================
+    # AI 호출
+    # =====================================================
+
+    try:
+
+        response = client.responses.parse(
+            model=model,
+            instructions=review_instructions,
+            input=review_input,
+            text_format=(
+                RequestedEvidenceReviewResponse
+            )
+        )
+
+
+        parsed_review = (
+            response.output_parsed
+        )
+
+
+        if parsed_review is None:
+
+            return requested_items
+
+
+    except Exception:
+
+        # 검수 실패 시 기존 추출 결과는 유지
+        return requested_items
+
+
+    # =====================================================
+    # 검수 결과 조회
+    # =====================================================
+
+    review_lookup = {
+        review.item_id: review
+
+        for review
+        in parsed_review.reviewed_items
+    }
+
+
+    refined_items = []
+
+
+    # =====================================================
+    # 검수 결과 적용
+    # =====================================================
+
+    for item_id, item in enumerate(
+        requested_items
+    ):
+
+        review = (
+            review_lookup.get(
+                item_id
+            )
+        )
+
+
+        # 검수결과 누락 시 기존 결과 유지
+        if review is None:
+
+            refined_items.append(
+                item
+            )
+
+            continue
+
+
+        # -------------------------------------------------
+        # 삭제
+        # -------------------------------------------------
+
+        if review.action == "remove":
+
+            continue
+
+
+        # -------------------------------------------------
+        # 같은 원문 안의 더 정확한 값으로 수정
+        # -------------------------------------------------
+
+        if review.action == "rewrite":
+
+            if (
+                review.corrected_value
+                is None
+
+                or
+
+                review.corrected_data_type
+                is None
+            ):
+
+                # 수정값이 불완전하면
+                # 기존 결과를 함부로 버리지 않음
+                refined_items.append(
+                    item
+                )
+
+                continue
+
+
+            item.value = (
+                review.corrected_value
+            )
+
+
+            item.unit = (
+                review.corrected_unit
+            )
+
+
+            item.data_type = (
+                review.corrected_data_type
+            )
+
+
+        # keep이면 아무것도 수정하지 않음
+        refined_items.append(
+            item
+        )
+
+
+    return refined_items
 
 # =========================================================
 # AI Evidence 추출
@@ -309,6 +1186,20 @@ Use only explicitly supported document information.
 
 Never estimate or fabricate missing values.
 
+If explicit evidence for a candidate-field combination does not exist,
+OMIT that combination entirely from requested_results.
+
+Do NOT create placeholder results such as:
+
+- "정보가 명시되지 않음"
+- "관련 정보 없음"
+- "확인할 수 없음"
+- "자료에 제시되지 않음"
+- "not specified"
+- "not provided"
+- "no information available"
+
+Absence of evidence is NOT an evidence result.
 
 For numeric information:
 
@@ -321,6 +1212,59 @@ Example:
 → value = 3
 → unit = "개월"
 
+IMPORTANT NUMERIC SEMANTIC RULE:
+
+A numeric value may be assigned to a requested field ONLY when
+that number directly measures the meaning of that requested field.
+
+Do NOT use a nearby number simply because it appears in the same
+sentence or paragraph.
+
+Example:
+
+Requested field:
+패키지 간섭
+
+Evidence:
+"하네스 길이가 약 70 mm 증가하며
+스포일러 내부 간섭 재검토가 필요하다."
+
+Incorrect:
+
+value = 70
+unit = "mm"
+
+because 70 mm describes harness length,
+not package interference.
+
+Correct:
+
+value = "스포일러 내부 간섭 재검토 필요"
+unit = null
+data_type = "qualitative"
+
+
+If the requested field were instead:
+
+하네스 길이 증가
+
+then:
+
+value = 70
+unit = "mm"
+data_type = "numeric"
+
+would be correct.
+
+
+When a passage contains both:
+
+- a numeric engineering parameter
+- and a qualitative effect on another requested criterion
+
+keep their meanings separate.
+
+Never transfer the number from one concept to another.
 
 For qualitative information:
 
@@ -437,22 +1381,171 @@ criteria as possible.
 The purpose is to help the user discover useful information
 while keeping the decision criteria concise and non-duplicative.
 
-
 ---------------------------------------------------------
-A. FIRST CHECK FOR OVERLAP WITH USER-REQUESTED FIELDS
+A. FIRST CHECK WHETHER THE INFORMATION IS ALREADY COVERED
 ---------------------------------------------------------
 
-Before creating a new suggested field, compare its meaning with
-ALL USER REQUESTED FIELDS.
+Before creating ANY new field, compare the semantic meaning of the
+information with ALL USER REQUESTED FIELDS.
 
-If the information substantially belongs to an existing
-user-requested field:
+Different wording does NOT mean a different decision criterion.
+
+A suggested item must be classified as:
 
 suggestion_type = "existing_field"
 
-target_field must exactly match ONE of the USER REQUESTED FIELDS.
+when the information is reasonably part of, evidence for, or a
+more specific aspect of an existing user-requested field.
 
-group_name must also use that existing field name whenever possible.
+
+This includes information that describes:
+
+- a specific aspect of the existing field
+- an advantage or disadvantage within the existing field
+- a risk related to the existing field
+- a consequence related to the existing field
+- a cause that explains the existing field
+- a concrete example or supporting fact for the existing field
+
+
+Use this test:
+
+"If an engineer were evaluating the existing requested field,
+could this information reasonably be used as evidence for that
+evaluation without creating a separate evaluation question?"
+
+If YES:
+
+suggestion_type = "existing_field"
+
+target_field must exactly match the BEST matching
+USER REQUESTED FIELD.
+
+group_name must use that same existing field name.
+
+Do NOT create a new criterion only because the document uses
+a different label.
+
+
+Example:
+
+USER REQUESTED FIELD:
+고객체감
+
+Document evidence:
+"미래감과 고급감이 높고 전기차다운 인상을 줄 수 있다."
+
+This information describes how the customer may perceive
+the product.
+
+Prefer:
+
+suggestion_type = "existing_field"
+target_field = "고객체감"
+group_name = "고객체감"
+
+Do NOT create a separate field such as:
+"고객가치"
+"디자인 이미지"
+"상품성"
+
+when those labels are only describing a specific aspect
+of the already-requested 고객체감 criterion.
+
+
+Another example:
+
+USER REQUESTED FIELD:
+품질
+
+Document evidence:
+"혹한에서 전개 불량이 발생하고 품질 클레임 위험이 있다."
+
+Prefer:
+
+suggestion_type = "existing_field"
+target_field = "품질"
+group_name = "품질"
+
+Do NOT create:
+"품질 리스크"
+"품질·안전 리스크"
+"클레임 위험"
+
+as separate criteria if they are simply describing
+the quality-related evidence.
+
+
+IMPORTANT:
+
+If one evidence passage contains multiple DISTINCT and SEPARABLE
+facts that belong to different USER REQUESTED FIELDS,
+split those facts into separate suggested_results.
+
+The same source evidence MAY therefore appear more than once,
+but each output item must contain only the part of the meaning
+that belongs to its target_field.
+
+Example:
+
+USER REQUESTED FIELDS:
+품질, 고객체감
+
+Document evidence:
+"디자인 상품성을 유지하면서 품질·안전 리스크를 줄일 수 있다."
+
+Do NOT create:
+"디자인 상품성"
+
+Do NOT force the entire sentence into only one existing field.
+
+Instead, separate the meanings:
+
+1)
+suggestion_type = "existing_field"
+target_field = "고객체감"
+group_name = "고객체감"
+value = "디자인 상품성 유지"
+
+2)
+suggestion_type = "existing_field"
+target_field = "품질"
+group_name = "품질"
+value = "품질·안전 리스크 감소"
+
+Both items may use the same page and source evidence.
+
+However, do NOT duplicate the same meaning across several fields.
+Split only when the source clearly contains genuinely different
+decision-relevant facts.
+
+
+---------------------------------------------------------
+B. CREATE A NEW FIELD ONLY FOR A TRULY DISTINCT DECISION AXIS
+---------------------------------------------------------
+
+Use:
+
+suggestion_type = "new_field"
+
+ONLY when the information cannot reasonably be evaluated
+under any existing user-requested field.
+
+A new field should represent a genuinely separate question
+the engineer would need to evaluate.
+
+
+Use this test:
+
+"Would the engineer need to ask a separate evaluation question
+for this information, even after considering all existing
+requested fields?"
+
+If NO:
+connect it to an existing field.
+
+If YES:
+a new field may be created.
 
 
 Example:
@@ -461,51 +1554,48 @@ USER REQUESTED FIELDS:
 품질, 원가, 고객체감
 
 Document evidence:
-"혹한에서 전개 실패 및 품질 클레임 위험"
+"공정 단계와 부품번호 관리가 증가해 생산 운영이 복잡해진다."
 
-Do NOT create:
-"품질·안전 리스크"
+This is not simply another expression of 품질, 원가,
+or 고객체감.
 
-Prefer:
+It represents a separate evaluation question:
 
-suggestion_type = "existing_field"
-target_field = "품질"
-group_name = "품질"
+"How complex is this option to manufacture or operate?"
 
-
-Another example:
-
-Document evidence:
-"디자인 상품성을 유지할 수 있다."
-
-If the user already requested "고객체감" and the evidence is
-explicitly about customer-perceived product appeal,
-it may be linked to:
-
-suggestion_type = "existing_field"
-target_field = "고객체감"
-
-Only do this when the semantic connection is genuinely supported.
-Do not force unrelated concepts into an existing field.
-
-
----------------------------------------------------------
-B. CREATE A NEW FIELD ONLY FOR A DISTINCT DECISION AXIS
----------------------------------------------------------
-
-Use:
+Therefore:
 
 suggestion_type = "new_field"
+target_field = null
+group_name = "제조 복잡도"
 
-only when the information represents a meaningfully distinct
-decision criterion that is not already covered by the requested fields.
 
-Examples may include:
+Other genuinely distinct axes may include, depending on
+the actual document context:
 
 - 검증 부담
 - 제조 복잡도
 - 정비성
 - 운영 복잡도
+
+These are examples only.
+
+Do NOT force these fields to exist when the document
+does not support them.
+
+
+For every new_field, verify all three conditions:
+
+1. Its meaning is not already covered by a user-requested field.
+
+2. It would require a genuinely separate engineering evaluation.
+
+3. Removing this new criterion would cause a meaningful
+   decision dimension to be lost.
+
+If any of these conditions is not satisfied,
+prefer existing_field instead.
+
 
 For new fields:
 
@@ -513,20 +1603,19 @@ target_field = null
 
 group_name must be a SHORT, CONSISTENT canonical field name.
 
-Semantically equivalent suggested information MUST use the same
-group_name.
+Semantically equivalent suggested information MUST use
+the same group_name.
 
-For example, these should NOT become three separate groups:
+For example, these should NOT become separate groups:
 
 - 제조 복잡도
 - 생산 복잡성
 - 공장 투입 관리 복잡도
 
-If they describe the same decision axis in context,
-use one shared group_name such as:
+If they represent the same decision axis in context,
+normalize them to one shared group_name such as:
 
 "제조 복잡도"
-
 
 ---------------------------------------------------------
 C. SPLIT COMPOUND CONCEPTS WHEN APPROPRIATE
@@ -889,6 +1978,50 @@ DOCUMENT:
             recovery_parsed.suggested_results
         )
 
+    # =====================================================
+    # 요청항목 2차 의미 검수
+    # =====================================================
+    #
+    # 추출된 값이 해당 판단항목을
+    # 실제로 직접 설명하는지 다시 확인한다.
+    #
+    # 예:
+    # 패키지 간섭 = 70 mm
+    # → 70 mm가 실제로 하네스 길이 증가량이라면
+    #   패키지 간섭의 숫자값으로 사용하지 않는다.
+    # =====================================================
+
+    all_requested_items = (
+        refine_requested_evidence(
+            requested_items=(
+                all_requested_items
+            ),
+            selected_fields=(
+                selected_fields
+            ),
+            model=model
+        )
+    )
+
+    # =====================================================
+    # 추가 발견 정보 2차 의미 검수
+    # =====================================================
+    #
+    # 1차 AI가 찾은 추가정보를 다시 한 번 모아서 보고,
+    # 기존 항목 / 신규 항목 / 참고정보 분류를 정리한다.
+    # =====================================================
+
+    all_suggested_items = (
+        refine_suggested_evidence(
+            suggested_items=(
+                all_suggested_items
+            ),
+            selected_fields=(
+                selected_fields
+            ),
+            model=model
+        )
+    )
 
     # =====================================================
     # 중복 Evidence 제거
@@ -900,6 +2033,46 @@ DOCUMENT:
 
 
     for item in all_requested_items:
+
+        # -------------------------------------------------
+        # 실제 데이터가 아니라
+        # "정보가 없다"는 설명만 반환된 경우 제외
+        # -------------------------------------------------
+
+        value_text = (
+            str(item.value)
+            .strip()
+            .casefold()
+        )
+
+
+        missing_value_patterns = [
+            "정보가 명시되지 않",
+            "정보가 제공되지 않",
+            "관련 정보가 없",
+            "관련 정보 없음",
+            "명시적 정보가 없",
+            "명시적 정보 없음",
+            "확인되지 않음",
+            "확인할 수 없음",
+            "자료에 제시되지 않",
+            "정보를 찾을 수 없",
+            "not specified",
+            "not provided",
+            "no information",
+            "information not found",
+            "not available"
+        ]
+
+
+        if any(
+            pattern in value_text
+
+            for pattern
+            in missing_value_patterns
+        ):
+
+            continue
 
         item_key = (
             item.scope,
@@ -934,8 +2107,115 @@ DOCUMENT:
 
     seen_suggested = set()
 
+    # =====================================================
+    # 기존 요청항목 이름 조회용
+    # =====================================================
+    #
+    # AI가 실수로 기존 항목과 똑같은 이름을
+    # new_field로 반환하는 경우를 Python에서 보정한다.
+    #
+    # 예:
+    # USER REQUESTED FIELD = "품질"
+    # AI new_field = "품질"
+    # → existing_field / target_field="품질"
+    # =====================================================
+
+    selected_field_lookup = {
+        str(field).strip().casefold(): field
+
+        for field
+        in selected_fields
+    }
 
     for item in all_suggested_items:
+
+        # -------------------------------------------------
+        # AI가 기존 요청항목과 정확히 같은 이름을
+        # 신규 항목으로 잘못 분류한 경우 자동 보정
+        # -------------------------------------------------
+
+        if item.suggestion_type == "new_field":
+
+            matched_existing_field = None
+
+
+            # 대표 그룹명과 AI가 만든 원래 항목명을
+            # 둘 다 기존 요청항목과 비교
+            for possible_name in [
+                item.group_name,
+                item.suggested_field
+            ]:
+
+                if not possible_name:
+
+                    continue
+
+
+                canonical_field = (
+                    selected_field_lookup.get(
+                        str(
+                            possible_name
+                        ).strip().casefold()
+                    )
+                )
+
+
+                if canonical_field:
+
+                    matched_existing_field = (
+                        canonical_field
+                    )
+
+                    break
+
+
+            if matched_existing_field:
+
+                item.suggestion_type = (
+                    "existing_field"
+                )
+
+                item.target_field = (
+                    matched_existing_field
+                )
+
+                item.group_name = (
+                    matched_existing_field
+                )
+
+
+        # -------------------------------------------------
+        # existing_field인데 기존 항목명의 대소문자나
+        # 공백이 달라진 경우도 실제 사용자 항목명으로 통일
+        # -------------------------------------------------
+
+        elif (
+            item.suggestion_type
+            == "existing_field"
+
+            and
+
+            item.target_field
+        ):
+
+            canonical_field = (
+                selected_field_lookup.get(
+                    str(
+                        item.target_field
+                    ).strip().casefold()
+                )
+            )
+
+
+            if canonical_field:
+
+                item.target_field = (
+                    canonical_field
+                )
+
+                item.group_name = (
+                    canonical_field
+                )
 
         item_key = (
             item.scope,
@@ -1514,5 +2794,6 @@ DOCUMENT:
 
     return (
         requested_results,
-        suggested_results
+        suggested_results,
+        candidate_names
     )

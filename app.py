@@ -5,7 +5,14 @@ from file_reader import read_pdf, read_excel
 from mock_extractor import build_mock_results
 from ai_extractor import extract_evidence
 from qualitative_comparator import compare_qualitative_evidence
-
+from comparison_summarizer import summarize_comparison_values
+from candidate_analyzer import analyze_candidate_characteristics
+from criterion_recommender import recommend_extraction_fields
+from condition_impact_analyzer import (
+    analyze_scenario_impact,
+    analyze_priority_change,
+    analyze_threshold_change
+)
 
 st.set_page_config(
     page_title="Engineering Decision Assistant",
@@ -987,9 +994,14 @@ with tab_analysis:
     st.markdown("### 추출 항목 설정")
 
     st.write(
-        "업로드한 자료에서 추출할 정보를 선택하거나 직접 추가하세요."
+        "먼저 AI가 문서에서 중요하게 다뤄지는 판단항목을 추천합니다. "
+        "추천 결과를 확인한 뒤 필요한 항목을 선택하거나 직접 추가하세요."
     )
 
+
+    # =====================================================
+    # 기본 항목
+    # =====================================================
 
     default_fields = [
         "개발기간",
@@ -1000,10 +1012,290 @@ with tab_analysis:
     ]
 
 
-    selected_default_fields = st.multiselect(
-        "기본 추출 항목",
-        default_fields,
-        default=default_fields
+    # =====================================================
+    # 현재 PDF 확인
+    # =====================================================
+
+    pdf_files_for_recommendation = []
+
+
+    if uploaded_files:
+
+        pdf_files_for_recommendation = [
+            file
+
+            for file
+            in uploaded_files
+
+            if file.name.lower().endswith(
+                ".pdf"
+            )
+        ]
+
+
+    # =====================================================
+    # 추천 결과 Session State
+    # =====================================================
+
+    if (
+        "field_recommendations"
+        not in st.session_state
+    ):
+
+        st.session_state.field_recommendations = []
+
+
+    if (
+        "field_recommendation_signature"
+        not in st.session_state
+    ):
+
+        st.session_state.field_recommendation_signature = None
+
+
+    # =====================================================
+    # 현재 PDF 상태 확인
+    # =====================================================
+
+    current_recommendation_signature = None
+
+
+    if pdf_files_for_recommendation:
+
+        recommendation_pdf = (
+            pdf_files_for_recommendation[0]
+        )
+
+
+        current_recommendation_signature = (
+            recommendation_pdf.name,
+            recommendation_pdf.size
+        )
+
+
+        # -------------------------------------------------
+        # 다른 PDF를 올렸다면 이전 추천 제거
+        # -------------------------------------------------
+
+        if (
+            st.session_state.field_recommendation_signature
+            is not None
+
+            and
+
+            st.session_state.field_recommendation_signature
+            != current_recommendation_signature
+        ):
+
+            st.session_state.field_recommendations = []
+
+            st.session_state.field_recommendation_signature = (
+                None
+            )
+
+
+    # =====================================================
+    # AI 추천 실행
+    # =====================================================
+
+    if pdf_files_for_recommendation:
+
+        if st.button(
+            "AI 추출항목 추천",
+            type="primary",
+            key="recommend_extraction_fields"
+        ):
+
+            try:
+
+                with st.spinner(
+                    "AI가 문서의 핵심 판단항목을 찾고 있습니다..."
+                ):
+
+                    recommendation_pages = (
+                        read_pdf(
+                            recommendation_pdf
+                        )
+                    )
+
+
+                    field_recommendations = (
+                        recommend_extraction_fields(
+                            pages=(
+                                recommendation_pages
+                            ),
+
+                            source_file=(
+                                recommendation_pdf.name
+                            )
+                        )
+                    )
+
+
+                st.session_state.field_recommendations = (
+                    field_recommendations
+                )
+
+
+                st.session_state.field_recommendation_signature = (
+                    current_recommendation_signature
+                )
+
+
+                st.success(
+                    f"추천 완료 · "
+                    f"{len(field_recommendations)}개의 "
+                    "판단항목을 찾았습니다."
+                )
+
+
+            except Exception as e:
+
+                st.error(
+                    "추출항목 추천 중 오류가 발생했습니다."
+                )
+
+                st.write(
+                    e
+                )
+
+
+    else:
+
+        st.info(
+            "PDF를 업로드하면 AI가 추출항목을 추천할 수 있습니다."
+        )
+
+
+    # =====================================================
+    # 추천 결과
+    # =====================================================
+
+    field_recommendations = (
+        st.session_state.get(
+            "field_recommendations",
+            []
+        )
+    )
+
+
+    recommended_field_names = [
+        recommendation[
+            "field"
+        ]
+
+        for recommendation
+        in field_recommendations
+    ]
+
+
+    selected_recommended_fields = []
+
+
+    if field_recommendations:
+
+        st.markdown(
+            "#### AI 추천 항목"
+        )
+
+        st.caption(
+            "문서에서 후보를 비교할 때 중요하게 다뤄지는 "
+            "판단축입니다. 필요 없는 항목은 선택 해제할 수 있습니다."
+        )
+
+
+        selected_recommended_fields = (
+            st.multiselect(
+                "추천 추출 항목",
+                recommended_field_names,
+                default=(
+                    recommended_field_names
+                ),
+                key="selected_recommended_fields"
+            )
+        )
+
+
+        # -------------------------------------------------
+        # 추천 이유
+        # -------------------------------------------------
+
+        with st.expander(
+            "추천 이유 보기",
+            expanded=False
+        ):
+
+            for recommendation in (
+                field_recommendations
+            ):
+
+                st.markdown(
+                    f'**{recommendation["field"]}**'
+                )
+
+
+                st.write(
+                    recommendation[
+                        "reason"
+                    ]
+                )
+
+
+                pages = (
+                    recommendation.get(
+                        "pages",
+                        []
+                    )
+                )
+
+
+                if pages:
+
+                    st.caption(
+                        "관련 페이지 · "
+                        + ", ".join(
+                            f"p.{page}"
+                            for page
+                            in pages
+                        )
+                    )
+
+
+                st.divider()
+
+
+    # =====================================================
+    # 기본 항목 추가 선택
+    # =====================================================
+
+    remaining_default_fields = [
+        field
+
+        for field
+        in default_fields
+
+        if field
+        not in recommended_field_names
+    ]
+
+
+    st.markdown(
+        "#### 추가 항목 선택"
+    )
+
+    st.caption(
+        "AI가 추천하지 않았더라도 필요하다고 판단되는 "
+        "기본 항목을 추가할 수 있습니다."
+    )
+
+
+    selected_default_fields = (
+        st.multiselect(
+            "기본 항목에서 추가",
+            remaining_default_fields,
+            default=[],
+            key="selected_extra_default_fields"
+        )
     )
 
 
@@ -1049,7 +1341,15 @@ with tab_analysis:
 
         elif (
             new_field in default_fields
-            or new_field in st.session_state.custom_fields
+
+            or
+
+            new_field in recommended_field_names
+
+            or
+
+            new_field
+            in st.session_state.custom_fields
         ):
 
             st.info(
@@ -1122,7 +1422,8 @@ with tab_analysis:
     # ---------------------------------------------------------
 
     selected_fields = (
-        selected_default_fields
+        selected_recommended_fields
+        + selected_default_fields
         + st.session_state.custom_fields
     )
 
@@ -1222,7 +1523,8 @@ with tab_analysis:
 
                 (
                     requested_results,
-                    suggested_results
+                    suggested_results,
+                    decision_candidates
                 ) = extract_evidence(
                     pages=pages,
                     selected_fields=selected_fields,
@@ -1237,7 +1539,11 @@ with tab_analysis:
             st.session_state.suggested_results = (
                 suggested_results
             )
-
+            
+            st.session_state.decision_candidates = (
+                decision_candidates
+            )
+            
             st.session_state.confirmed_results = []
 
 
@@ -1294,6 +1600,30 @@ with tab_analysis:
 
             st.session_state.suggested_results = (
                 suggested_results
+            )
+
+            mock_decision_candidates = list(
+                dict.fromkeys(
+                    result.get(
+                        "candidate"
+                    )
+
+                    for result
+                    in requested_results
+
+                    if result.get(
+                        "candidate"
+                    )
+                    and result.get(
+                        "candidate"
+                    )
+                    != "공통 정보"
+                )
+            )
+
+
+            st.session_state.decision_candidates = (
+                mock_decision_candidates
             )
 
             st.session_state.confirmed_results = []
@@ -4223,15 +4553,51 @@ with tab_compare:
 
         # -----------------------------------------------------
         # 후보 목록
+        #
+        # Evidence 유무와 관계없이
+        # 문서에서 처음 식별한 전체 후보를 유지한다.
         # -----------------------------------------------------
 
         candidate_names = list(
-            dict.fromkeys(
-                result["candidate"]
-                for result
-                in confirmed_results
+            st.session_state.get(
+                "decision_candidates",
+                []
             )
         )
+
+
+        # 이전 세션 데이터 등에서 후보목록이 없는 경우만
+        # confirmed_results를 fallback으로 사용
+        if not candidate_names:
+
+            candidate_names = list(
+                dict.fromkeys(
+                    result["candidate"]
+
+                    for result
+                    in confirmed_results
+
+                    if result.get(
+                        "candidate"
+                    )
+                    and result.get(
+                        "candidate"
+                    )
+                    != "공통 정보"
+                )
+            )
+
+
+        candidate_names = [
+            candidate
+
+            for candidate
+            in candidate_names
+
+            if candidate
+            and candidate
+            != "공통 정보"
+        ]
 
 
         # -----------------------------------------------------
@@ -4292,6 +4658,283 @@ with tab_compare:
             key=criterion_sort_key
         )
 
+        # =====================================================
+        # 비교표용 문장 요약
+        # =====================================================
+        #
+        # 정량값은 그대로 사용하고,
+        # 문장형 정성정보만 AI가 짧게 정리한다.
+        #
+        # 같은 내용은 한 번 요약한 뒤 session_state에 저장하고,
+        # 원본 문장이 바뀌었을 때만 다시 AI를 호출한다.
+        # =====================================================
+
+        # =====================================================
+        # 같은 후보 + 같은 항목의 문장형 정보를 먼저 묶음
+        # =====================================================
+
+        grouped_comparison_values = {}
+
+
+        for result in confirmed_results:
+
+            value_text = str(
+                result.get(
+                    "value",
+                    ""
+                )
+            ).strip()
+
+
+            # 숫자형은 AI 요약하지 않음
+            if (
+                result.get(
+                    "data_type"
+                )
+                != "qualitative"
+            ):
+
+                continue
+
+
+            # 상 / 중 / 하는 이미 충분히 짧으므로 제외
+            if value_text in {
+                "상",
+                "중",
+                "하"
+            }:
+
+                continue
+
+
+            if not value_text:
+
+                continue
+
+
+            group_key = (
+                result[
+                    "candidate"
+                ],
+                result[
+                    "field"
+                ]
+            )
+
+
+            if (
+                group_key
+                not in grouped_comparison_values
+            ):
+
+                grouped_comparison_values[
+                    group_key
+                ] = []
+
+
+            # 완전히 같은 내용은 중복 저장하지 않음
+            if (
+                value_text
+                not in grouped_comparison_values[
+                    group_key
+                ]
+            ):
+
+                grouped_comparison_values[
+                    group_key
+                ].append(
+                    value_text
+                )
+
+
+        # =====================================================
+        # AI에게는 후보 + 항목당 하나의 입력만 전달
+        # =====================================================
+
+        comparison_summary_items = []
+
+
+        for (
+            candidate,
+            criterion
+        ), values in (
+            grouped_comparison_values.items()
+        ):
+
+            combined_value = "\n".join(
+                f"- {value}"
+                for value in values
+            )
+
+
+            comparison_summary_items.append(
+                {
+                    "candidate": (
+                        candidate
+                    ),
+
+                    "criterion": (
+                        criterion
+                    ),
+
+                    "value": (
+                        combined_value
+                    )
+                }
+            )
+
+
+        # -----------------------------------------------------
+        # 현재 요약 대상 문장들의 상태
+        #
+        # candidate / criterion / value 중 하나라도 바뀌면
+        # 이전 요약을 다시 사용하지 않음
+        # -----------------------------------------------------
+
+        comparison_summary_signature = tuple(
+            sorted(
+                (
+                    str(
+                        item[
+                            "candidate"
+                        ]
+                    ),
+
+                    str(
+                        item[
+                            "criterion"
+                        ]
+                    ),
+
+                    str(
+                        item[
+                            "value"
+                        ]
+                    )
+                )
+
+                for item
+                in comparison_summary_items
+            )
+        )
+
+
+        stored_summary_signature = (
+            st.session_state.get(
+                "comparison_summary_signature"
+            )
+        )
+
+
+        # -----------------------------------------------------
+        # 처음 실행하거나 원본 문장이 변경된 경우에만
+        # AI 요약 새로 실행
+        # -----------------------------------------------------
+
+        if (
+            comparison_summary_items
+
+            and
+
+            stored_summary_signature
+            != comparison_summary_signature
+        ):
+
+            try:
+
+                with st.spinner(
+                    "비교표의 문장형 정보를 간단히 정리하고 있습니다..."
+                ):
+
+                    comparison_summary_results = (
+                        summarize_comparison_values(
+                            comparison_summary_items
+                        )
+                    )
+
+
+                st.session_state[
+                    "comparison_summary_results"
+                ] = (
+                    comparison_summary_results
+                )
+
+
+                st.session_state[
+                    "comparison_summary_signature"
+                ] = (
+                    comparison_summary_signature
+                )
+
+
+            except Exception as e:
+
+                # 요약에 실패해도
+                # 비교표 자체는 기존 원문으로 표시
+                st.warning(
+                    "비교표용 문장 요약에 실패해 "
+                    "기존 내용을 표시합니다."
+                )
+
+
+        # 문장형 정보가 하나도 없으면
+        # 이전에 저장된 결과 제거
+        elif not comparison_summary_items:
+
+            st.session_state[
+                "comparison_summary_results"
+            ] = []
+
+
+            st.session_state[
+                "comparison_summary_signature"
+            ] = (
+                comparison_summary_signature
+            )
+
+
+        # -----------------------------------------------------
+        # 저장된 요약을 빠르게 찾기 위한 lookup
+        #
+        # 예:
+        # ("A안", "품질")
+        # → ["흑한 전개 불량 위험 큼", "품질 클레임 위험 큼"]
+        # -----------------------------------------------------
+
+        comparison_summary_lookup = {}
+
+
+        if (
+            st.session_state.get(
+                "comparison_summary_signature"
+            )
+            == comparison_summary_signature
+        ):
+
+            for summary in (
+                st.session_state.get(
+                    "comparison_summary_results",
+                    []
+                )
+            ):
+
+                key = (
+                    summary[
+                        "candidate"
+                    ],
+                    summary[
+                        "criterion"
+                    ]
+                )
+
+
+                comparison_summary_lookup[
+                    key
+                ] = (
+                    summary[
+                        "points"
+                    ]
+                )
 
         # -----------------------------------------------------
         # 후보 비교표 생성
@@ -4414,31 +5057,64 @@ with tab_compare:
 
                 if matching_result:
 
-                    row_data[
-                        candidate
-                    ] = format_comparison_value(
-                        value=(
-                            matching_result[
-                                "value"
-                            ]
-                        ),
-                        unit=(
-                            matching_result[
-                                "unit"
-                            ]
-                        ),
-                        data_type=(
-                            matching_result[
-                                "data_type"
-                            ]
+                    # -----------------------------------------
+                    # AI가 만든 비교표용 짧은 요약 확인
+                    # -----------------------------------------
+
+                    summary_points = (
+                        comparison_summary_lookup.get(
+                            (
+                                candidate,
+                                criterion
+                            )
                         )
                     )
+
+
+                    # 문장형 정보에 AI 요약이 있으면
+                    # 비교표에서는 짧은 포인트만 표시
+                    if summary_points:
+
+                        row_data[
+                            candidate
+                        ] = "\n".join(
+                            f"• {point}"
+
+                            for point
+                            in summary_points
+                        )
+
+
+                    # 숫자형 / 상중하 / 요약 실패 등의 경우
+                    # 기존 표시 방식 사용
+                    else:
+
+                        row_data[
+                            candidate
+                        ] = format_comparison_value(
+                            value=(
+                                matching_result[
+                                    "value"
+                                ]
+                            ),
+                            unit=(
+                                matching_result[
+                                    "unit"
+                                ]
+                            ),
+                            data_type=(
+                                matching_result[
+                                    "data_type"
+                                ]
+                            )
+                        )
+
 
                 else:
 
                     row_data[
                         candidate
-                    ] = "-"                
+                    ] = "-"              
 
 
             comparison_rows.append(
@@ -4833,14 +5509,48 @@ with tab_compare:
 
             # -----------------------------------------------------
             # 후보 목록
+            #
+            # 최초 식별 후보 전체를 유지한다.
             # -----------------------------------------------------
 
             candidate_names = list(
-                dict.fromkeys(
-                    result["candidate"]
-                    for result in confirmed_results
+                st.session_state.get(
+                    "decision_candidates",
+                    []
                 )
             )
+
+
+            if not candidate_names:
+
+                candidate_names = list(
+                    dict.fromkeys(
+                        result["candidate"]
+
+                        for result
+                        in confirmed_results
+
+                        if result.get(
+                            "candidate"
+                        )
+                        and result.get(
+                            "candidate"
+                        )
+                        != "공통 정보"
+                    )
+                )
+
+
+            candidate_names = [
+                candidate
+
+                for candidate
+                in candidate_names
+
+                if candidate
+                and candidate
+                != "공통 정보"
+            ]
 
 
             # =====================================================
@@ -4853,6 +5563,10 @@ with tab_compare:
 
             comparison_signature = (
 
+                tuple(
+                    candidate_names
+                ),
+                
                 tuple(
                     sorted(
                         (
@@ -5146,656 +5860,596 @@ with tab_compare:
 
 
             # =====================================================
-            # 후보별 분석결과 저장
+            # 후보별 장단점 / Trade-off 분석
+            # =====================================================
+            #
+            # Python과 기존 정성 비교 결과를 바탕으로
+            # 후보별 강점·약점·Trade-off를 AI가 설명한다.
+            #
+            # Evidence / 판단기준 / 정성 비교결과 중 하나라도
+            # 바뀌면 기존 분석 결과를 다시 사용하지 않는다.
             # =====================================================
 
-            candidate_analysis = {
-                candidate: {
-                    "strengths": [],
-                    "weaknesses": [],
-                    "insufficient": [],
-                    "risks": []
-                }
+            candidate_analysis_signature = (
 
-                for candidate
-                in candidate_names
-            }
+                "analysis_basis_v2",
+                
+                comparison_signature,
+
+                tuple(
+                    sorted(
+                        (
+                            str(
+                                criterion
+                            ),
+
+                            str(
+                                setting.get(
+                                    "role",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "priority",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "direction",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "constraint_operator",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "constraint_value",
+                                    ""
+                                )
+                            )
+                        )
+
+                        for criterion, setting
+                        in criterion_settings.items()
+                    )
+                ),
+
+                tuple(
+                    sorted(
+                        (
+                            str(
+                                comparison.get(
+                                    "candidate",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "criterion",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "position",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "reason",
+                                    ""
+                                )
+                            )
+                        )
+
+                        for comparison
+                        in ai_comparison_results
+                    )
+                )
+            )
+
+
+            stored_candidate_analysis_signature = (
+                st.session_state.get(
+                    "candidate_analysis_signature"
+                )
+            )
+
+
+            has_candidate_analysis = (
+                "candidate_analysis_results"
+                in st.session_state
+            )
+
+
+            current_candidate_analysis_available = (
+                has_candidate_analysis
+
+                and
+
+                stored_candidate_analysis_signature
+                == candidate_analysis_signature
+            )
 
 
             # =====================================================
-            # 1. Python 기반 상대 강점 / 약점 분석
+            # 분석 실행 가능 여부
+            # =====================================================
+            #
+            # 문장형 정성정보가 존재한다면
+            # 먼저 앞 단계의 AI 상대비교를 완료해야 한다.
+            #
+            # 정성정보가 없다면 바로 실행 가능하다.
             # =====================================================
 
-            for criterion, setting in (
-                criterion_settings.items()
+            can_run_candidate_analysis = (
+
+                not free_text_criteria
+
+                or
+
+                current_ai_result_available
+            )
+
+
+            st.markdown(
+                "<div style='height: 28px;'></div>",
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+            st.markdown(
+                "<div style='height: 12px;'></div>",
+                unsafe_allow_html=True
+            )
+
+
+            st.markdown(
+                "### 후보별 장단점·Trade-off"
+            )
+
+            st.caption(
+                "확정된 정보와 후보 간 비교를 바탕으로 "
+                "확인된 장점·부담과 상대적 강점·약점을 정리하고, "
+                "설계구조에서 예상되는 영향은 별도로 구분해 보여줍니다. "
+                "AI가 최종 후보를 선택하지는 않습니다."
+            )
+
+
+            # =====================================================
+            # 문장형 비교 선행 필요 안내
+            # =====================================================
+
+            if (
+                free_text_criteria
+
+                and
+
+                not current_ai_result_available
             ):
 
-                direction = (
-                    setting.get(
-                        "direction"
+                st.info(
+                    "문장형 정성정보가 포함되어 있습니다. "
+                    "위의 'AI 비교 실행'을 먼저 실행하면 "
+                    "정성정보의 상대적 강점·약점까지 반영할 수 있습니다."
+                )
+
+
+            # =====================================================
+            # 후보 특성 분석 실행
+            # =====================================================
+
+            if st.button(
+                "후보 특성 분석 실행",
+                type="primary",
+                key="run_candidate_characteristic_analysis",
+                disabled=(
+                    not can_run_candidate_analysis
+                )
+            ):
+
+                try:
+
+                    with st.spinner(
+                        "후보별 강점·약점과 "
+                        "Trade-off를 정리하고 있습니다..."
+                    ):
+
+                        candidate_analysis_results = (
+                            analyze_candidate_characteristics(
+                                confirmed_results=(
+                                    confirmed_results
+                                ),
+                                criterion_settings=(
+                                    criterion_settings
+                                ),
+                                qualitative_comparison_results=(
+                                    ai_comparison_results
+                                )
+                            )
+                        )
+
+
+                    st.session_state[
+                        "candidate_analysis_results"
+                    ] = (
+                        candidate_analysis_results
+                    )
+
+
+                    st.session_state[
+                        "candidate_analysis_signature"
+                    ] = (
+                        candidate_analysis_signature
+                    )
+
+
+                    current_candidate_analysis_available = (
+                        True
+                    )
+
+
+                    st.success(
+                        "후보별 특성 분석이 완료되었습니다."
+                    )
+
+
+                except Exception as e:
+
+                    st.error(
+                        "후보별 특성 분석 중 "
+                        "오류가 발생했습니다."
+                    )
+
+                    st.write(
+                        e
+                    )
+
+
+            # =====================================================
+            # 기존 결과가 오래된 경우
+            # =====================================================
+
+            elif (
+                has_candidate_analysis
+
+                and
+
+                stored_candidate_analysis_signature
+                != candidate_analysis_signature
+            ):
+
+                st.warning(
+                    "확정된 정보 또는 판단기준이 변경되어 "
+                    "기존 후보 특성 분석 결과를 사용하지 않습니다. "
+                    "다시 분석해주세요."
+                )
+
+
+            # =====================================================
+            # 분석 결과 표시
+            # =====================================================
+
+            if (
+                current_candidate_analysis_available
+            ):
+
+                candidate_analysis_results = (
+                    st.session_state.get(
+                        "candidate_analysis_results",
+                        []
                     )
                 )
 
-                data_type = (
-                    setting.get(
-                        "data_type"
-                    )
-                )
 
+                analysis_lookup = {
+                    analysis.get(
+                        "candidate"
+                    ): analysis
 
-                # 선호 방향이 없는 항목은
-                # 상대비교하지 않음
-                if (
-                    direction is None
-                    or direction == "방향 없음"
-                ):
+                    for analysis
+                    in candidate_analysis_results
 
-                    continue
-
-
-                criterion_results = [
-                    result
-
-                    for result
-                    in confirmed_results
-
-                    if result["field"]
-                    == criterion
-                ]
-
-
-                # 실제 후보가 2개 미만이면 비교 불가
-                criterion_candidate_names = {
-                    result["candidate"]
-                    for result in criterion_results
-                }
-
-
-                if len(
-                    criterion_candidate_names
-                ) < 2:
-
-                    continue
-
-
-                # =================================================
-                # 정량형
-                # =================================================
-
-                if data_type in [
-                    "numeric",
-                    "ranking"
-                ]:
-
-                    numeric_values = {}
-
-
-                    for result in criterion_results:
-
-                        try:
-
-                            numeric_values[
-                                result["candidate"]
-                            ] = float(
-                                result["value"]
-                            )
-
-
-                        except (
-                            ValueError,
-                            TypeError
-                        ):
-
-                            pass
-
-
-                    if len(
-                        numeric_values
-                    ) < 2:
-
-                        continue
-
-
-                    values = list(
-                        numeric_values.values()
-                    )
-
-
-                    # 전부 동일하면
-                    # 강점/약점 구분하지 않음
-                    if max(values) == min(values):
-
-                        continue
-
-
-                    if (
-                        direction
-                        == "높을수록 좋음"
-                    ):
-
-                        best_value = max(
-                            values
-                        )
-
-                        worst_value = min(
-                            values
-                        )
-
-
-                    elif (
-                        direction
-                        == "낮을수록 좋음"
-                    ):
-
-                        best_value = min(
-                            values
-                        )
-
-                        worst_value = max(
-                            values
-                        )
-
-
-                    else:
-
-                        continue
-
-
-                    for candidate, value in (
-                        numeric_values.items()
-                    ):
-
-                        if value == best_value:
-
-                            if (
-                                criterion
-                                not in
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "strengths"
-                                ]
-                            ):
-
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "strengths"
-                                ].append(
-                                    criterion
-                                )
-
-
-                        if value == worst_value:
-
-                            if (
-                                criterion
-                                not in
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "weaknesses"
-                                ]
-                            ):
-
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "weaknesses"
-                                ].append(
-                                    criterion
-                                )
-
-
-                # =================================================
-                # 정성형
-                # =================================================
-
-                elif data_type == "qualitative":
-
-                    values = [
-                        str(
-                            result["value"]
-                        ).strip()
-
-                        for result
-                        in criterion_results
-                    ]
-
-
-                    # ---------------------------------------------
-                    # 문장이 하나라도 포함되어 있다면
-                    # Python이 억지로 변환하지 않고
-                    # AI 비교에 맡김
-                    # ---------------------------------------------
-
-                    if not all(
-                        value
-                        in structured_qualitative_labels
-
-                        for value
-                        in values
-                    ):
-
-                        continue
-
-
-                    # ---------------------------------------------
-                    # 상 / 중 / 하는 기존 규칙 기반 비교
-                    # ---------------------------------------------
-
-                    if (
-                        direction
-                        == "상 > 중 > 하"
-                    ):
-
-                        qualitative_score = {
-                            "상": 3,
-                            "중": 2,
-                            "하": 1
-                        }
-
-
-                    elif (
-                        direction
-                        == "하 > 중 > 상"
-                    ):
-
-                        qualitative_score = {
-                            "하": 3,
-                            "중": 2,
-                            "상": 1
-                        }
-
-
-                    else:
-
-                        continue
-
-
-                    scored_values = {}
-
-
-                    for result in criterion_results:
-
-                        value = str(
-                            result["value"]
-                        ).strip()
-
-
-                        if (
-                            value
-                            in qualitative_score
-                        ):
-
-                            scored_values[
-                                result["candidate"]
-                            ] = (
-                                qualitative_score[
-                                    value
-                                ]
-                            )
-
-
-                    if len(
-                        scored_values
-                    ) < 2:
-
-                        continue
-
-
-                    values = list(
-                        scored_values.values()
-                    )
-
-
-                    if max(values) == min(values):
-
-                        continue
-
-
-                    best_value = max(
-                        values
-                    )
-
-                    worst_value = min(
-                        values
-                    )
-
-
-                    for candidate, value in (
-                        scored_values.items()
-                    ):
-
-                        if value == best_value:
-
-                            if (
-                                criterion
-                                not in
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "strengths"
-                                ]
-                            ):
-
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "strengths"
-                                ].append(
-                                    criterion
-                                )
-
-
-                        if value == worst_value:
-
-                            if (
-                                criterion
-                                not in
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "weaknesses"
-                                ]
-                            ):
-
-                                candidate_analysis[
-                                    candidate
-                                ][
-                                    "weaknesses"
-                                ].append(
-                                    criterion
-                                )
-
-
-            # =====================================================
-            # 2. AI 문장형 정성 비교 결과 병합
-            # =====================================================
-
-            for comparison in (
-                ai_comparison_results
-            ):
-
-                candidate = (
-                    comparison.get(
+                    if analysis.get(
                         "candidate"
                     )
-                )
+                }
 
-                criterion = (
-                    comparison.get(
-                        "criterion"
-                    )
-                )
 
-                position = (
-                    comparison.get(
-                        "position"
-                    )
+                st.markdown(
+                    "<div style='height: 20px;'></div>",
+                    unsafe_allow_html=True
                 )
 
 
-                # 현재 후보/항목에 없는
-                # 잘못된 AI 결과 방어
-                if (
-                    candidate
-                    not in candidate_analysis
+                for candidate in (
+                    candidate_names
                 ):
 
-                    continue
+                    analysis = (
+                        analysis_lookup.get(
+                            candidate,
+                            {}
+                        )
+                    )
 
 
-                if (
-                    criterion
-                    not in criterion_settings
-                ):
+                    strengths = (
+                        analysis.get(
+                            "strengths",
+                            []
+                        )
+                    )
 
-                    continue
+
+                    weaknesses = (
+                        analysis.get(
+                            "weaknesses",
+                            []
+                        )
+                    )
 
 
-                # ---------------------------------------------
-                # 상대적 강점
-                # ---------------------------------------------
+                    tradeoffs = (
+                        analysis.get(
+                            "tradeoffs",
+                            []
+                        )
+                    )
 
-                if position == "strength":
 
-                    if (
-                        criterion
-                        not in
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "strengths"
-                        ]
+                    with st.container(
+                        border=True
                     ):
 
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "strengths"
-                        ].append(
-                            criterion
+                        st.markdown(
+                            f"#### {candidate}"
                         )
 
 
-                # ---------------------------------------------
-                # 상대적 약점
-                # ---------------------------------------------
-
-                elif position == "weakness":
-
-                    if (
-                        criterion
-                        not in
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "weaknesses"
-                        ]
-                    ):
-
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "weaknesses"
-                        ].append(
-                            criterion
-                        )
-
-
-                # ---------------------------------------------
-                # 판단 근거 부족
-                # ---------------------------------------------
-
-                elif position == "insufficient":
-
-                    if (
-                        criterion
-                        not in
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "insufficient"
-                        ]
-                    ):
-
-                        candidate_analysis[
-                            candidate
-                        ][
-                            "insufficient"
-                        ].append(
-                            criterion
-                        )
-
-
-                # neutral은
-                # 강점/약점으로 표시하지 않음
-
-
-            # =====================================================
-            # 3. 필수 기준 미충족 리스크 분석
-            # =====================================================
-
-            for criterion, setting in (
-                criterion_settings.items()
-            ):
-
-                if (
-                    setting.get(
-                        "role"
-                    )
-                    != "필수 기준"
-                ):
-
-                    continue
-
-
-                data_type = (
-                    setting.get(
-                        "data_type"
-                    )
-                )
-
-                operator = (
-                    setting.get(
-                        "constraint_operator"
-                    )
-                )
-
-                constraint_value = (
-                    setting.get(
-                        "constraint_value"
-                    )
-                )
-
-                unit = (
-                    setting.get(
-                        "unit"
-                    )
-                    or ""
-                )
-
-
-                # 현재는 정량형 필수 기준만
-                # 명시적 threshold 판정
-                if (
-                    data_type
-                    not in [
-                        "numeric",
-                        "ranking"
-                    ]
-                    or operator is None
-                    or constraint_value is None
-                ):
-
-                    continue
-
-
-                for result in confirmed_results:
-
-                    if (
-                        result["field"]
-                        != criterion
-                    ):
-
-                        continue
-
-
-                    try:
-
-                        actual_value = float(
-                            result["value"]
-                        )
-
-                        standard_value = float(
-                            constraint_value
-                        )
-
-
-                        if operator == "≤":
-
-                            satisfied = (
-                                actual_value
-                                <= standard_value
+                        strength_col, weakness_col, tradeoff_col = (
+                            st.columns(
+                                [1, 1, 1.2]
                             )
+                        )
 
 
-                        elif operator == "≥":
+                        # =========================================
+                        # 강점
+                        # =========================================
 
-                            satisfied = (
-                                actual_value
-                                >= standard_value
-                            )
+                        strength_col.markdown(
+                            "**강점**"
+                        )
 
 
-                        elif operator == "=":
+                        if strengths:
 
-                            satisfied = (
-                                actual_value
-                                == standard_value
-                            )
+                            for point in (
+                                strengths
+                            ):
+
+                                criterion = (
+                                    point.get(
+                                        "criterion",
+                                        "-"
+                                    )
+                                )
+
+
+                                basis = (
+                                    point.get(
+                                        "basis",
+                                        "confirmed"
+                                    )
+                                )
+
+
+                                text = (
+                                    point.get(
+                                        "text",
+                                        ""
+                                    )
+                                )
+
+
+                                strength_basis_label = {
+                                    "relative": (
+                                        "상대 강점"
+                                    ),
+
+                                    "confirmed": (
+                                        "확인된 장점"
+                                    ),
+
+                                    "inferred": (
+                                        "예상 장점"
+                                    )
+                                }.get(
+                                    basis,
+                                    "장점"
+                                )
+
+
+                                inference_note = (
+                                    " *(추가 검증 필요)*"
+                                    if basis
+                                    == "inferred"
+                                    else ""
+                                )
+
+
+                                strength_col.markdown(
+                                    f"- **{criterion}** · "
+                                    f"**{strength_basis_label}** · "
+                                    f"{text}"
+                                    f"{inference_note}"
+                                )
 
 
                         else:
 
-                            continue
-
-
-                        if not satisfied:
-
-                            displayed_value = (
-                                format_value(
-                                    result["value"],
-                                    result["unit"]
-                                )
+                            strength_col.caption(
+                                "확인된 장점 없음"
                             )
 
 
-                            if (
-                                standard_value
-                                .is_integer()
+                        # =========================================
+                        # 약점
+                        # =========================================
+
+                        weakness_col.markdown(
+                            "**약점**"
+                        )
+
+
+                        if weaknesses:
+
+                            for point in (
+                                weaknesses
                             ):
 
-                                displayed_standard = int(
-                                    standard_value
+                                criterion = (
+                                    point.get(
+                                        "criterion",
+                                        "-"
+                                    )
                                 )
 
 
-                            else:
-
-                                displayed_standard = (
-                                    standard_value
+                                basis = (
+                                    point.get(
+                                        "basis",
+                                        "confirmed"
+                                    )
                                 )
 
 
-                            risk_text = (
-                                f"{criterion}: "
-                                f"{displayed_value} "
-                                f"(기준 {operator} "
-                                f"{displayed_standard}{unit})"
+                                text = (
+                                    point.get(
+                                        "text",
+                                        ""
+                                    )
+                                )
+
+
+                                weakness_basis_label = {
+                                    "relative": (
+                                        "상대 약점"
+                                    ),
+
+                                    "confirmed": (
+                                        "확인된 부담"
+                                    ),
+
+                                    "inferred": (
+                                        "예상 부담"
+                                    )
+                                }.get(
+                                    basis,
+                                    "약점"
+                                )
+
+
+                                inference_note = (
+                                    " *(추가 검증 필요)*"
+                                    if basis
+                                    == "inferred"
+                                    else ""
+                                )
+
+
+                                weakness_col.markdown(
+                                    f"- **{criterion}** · "
+                                    f"**{weakness_basis_label}** · "
+                                    f"{text}"
+                                    f"{inference_note}"
+                                )
+
+
+                        else:
+
+                            weakness_col.caption(
+                                "확인된 부담 없음"
                             )
 
 
-                            candidate_analysis[
-                                result["candidate"]
-                            ][
-                                "risks"
-                            ].append(
-                                risk_text
+                        # =========================================
+                        # Trade-off
+                        # =========================================
+
+                        tradeoff_col.markdown(
+                            "**Trade-off**"
+                        )
+
+
+                        if tradeoffs:
+
+                            for point in (
+                                tradeoffs
+                            ):
+
+                                criteria = (
+                                    point.get(
+                                        "criteria",
+                                        []
+                                    )
+                                )
+
+
+                                criteria_text = (
+                                    " ↔ ".join(
+                                        criteria
+                                    )
+                                )
+
+
+                                text = (
+                                    point.get(
+                                        "text",
+                                        ""
+                                    )
+                                )
+
+
+                                if criteria_text:
+
+                                    tradeoff_col.markdown(
+                                        f"- **{criteria_text}** · "
+                                        f"{text}"
+                                    )
+
+
+                                else:
+
+                                    tradeoff_col.markdown(
+                                        f"- {text}"
+                                    )
+
+
+                        else:
+
+                            tradeoff_col.caption(
+                                "명확한 Trade-off 없음"
                             )
-
-
-                    except (
-                        ValueError,
-                        TypeError
-                    ):
-
-                        pass
-
 
             # =====================================================
-            # 4. 후보 특성 분석 결과 표
+            # 판단조건 변화 시나리오 분석
             # =====================================================
 
             st.markdown(
@@ -5811,121 +6465,1202 @@ with tab_compare:
             )
 
             st.markdown(
-                "### 후보별 특성"
+                "### 판단조건 변화 분석"
             )
 
             st.caption(
-                "정량 비교와 문장형 Evidence 분석을 종합해 "
-                "후보별 상대적 강점·약점과 리스크를 정리합니다."
+                "판단항목의 중요도, 필수 기준값, 사용환경 등이 "
+                "달라졌을 때 후보별 판단근거가 어떻게 달라지는지 확인합니다."
+            )
+
+            # =====================================================
+            # 1. 판단항목 중요도 변화
+            # =====================================================
+
+            st.markdown(
+                "#### 1. 판단항목 중요도 변화"
+            )
+
+            st.caption(
+                "특정 판단항목을 더 중요하게 또는 덜 중요하게 볼 때 "
+                "후보별 기존 강점·약점이 어떻게 달라 보이는지 확인합니다."
             )
 
 
-            analysis_rows = []
+            # -----------------------------------------------------
+            # 중요도 변화 분석 가능한 항목
+            # -----------------------------------------------------
+
+            priority_change_criteria = [
+                criterion
+
+                for criterion, setting
+                in criterion_settings.items()
+
+                if (
+                    setting.get("role")
+                    in [
+                        "필수 기준",
+                        "평가항목"
+                    ]
+
+                    and
+
+                    setting.get("direction")
+                    not in [
+                        None,
+                        "방향 없음"
+                    ]
+                )
+            ]
 
 
-            for candidate in candidate_names:
+            if priority_change_criteria:
 
-                analysis = (
-                    candidate_analysis[
-                        candidate
+                (
+                    priority_criterion_col,
+                    priority_value_col,
+                    priority_button_col
+                ) = st.columns(
+                    [2.5, 1.5, 1.2],
+                    vertical_alignment="bottom"
+                )
+
+
+                selected_priority_criterion = (
+                    priority_criterion_col.selectbox(
+                        "판단항목",
+                        priority_change_criteria,
+                        key="priority_change_criterion"
+                    )
+                )
+
+
+                selected_priority_setting = (
+                    criterion_settings[
+                        selected_priority_criterion
                     ]
                 )
 
 
-                strengths_text = (
-                    ", ".join(
-                        analysis[
-                            "strengths"
+                current_priority = int(
+                    selected_priority_setting.get(
+                        "priority"
+                    )
+                    or 1
+                )
+
+
+                new_priority = (
+                    priority_value_col.number_input(
+                        "가상 우선순위",
+                        min_value=1,
+                        value=current_priority,
+                        step=1,
+                        key=(
+                            f"priority_change_value_"
+                            f"{selected_priority_criterion}"
+                        )
+                    )
+                )
+
+
+                # -------------------------------------------------
+                # 현재 분석 조건 Signature
+                # -------------------------------------------------
+
+                priority_change_signature = (
+                    selected_priority_criterion,
+
+                    current_priority,
+
+                    int(
+                        new_priority
+                    ),
+
+                    comparison_signature,
+
+                    tuple(
+                        sorted(
+                            (
+                                str(
+                                    comparison.get(
+                                        "candidate",
+                                        ""
+                                    )
+                                ),
+
+                                str(
+                                    comparison.get(
+                                        "criterion",
+                                        ""
+                                    )
+                                ),
+
+                                str(
+                                    comparison.get(
+                                        "position",
+                                        ""
+                                    )
+                                )
+                            )
+
+                            for comparison
+                            in ai_comparison_results
+                        )
+                    )
+                )
+
+
+                # -------------------------------------------------
+                # 중요도 변화 분석 실행
+                # -------------------------------------------------
+
+                if priority_button_col.button(
+                    "영향 확인",
+                    key="run_priority_change_analysis",
+                    use_container_width=True
+                ):
+
+                    priority_change_result = (
+                        analyze_priority_change(
+                            criterion=(
+                                selected_priority_criterion
+                            ),
+
+                            new_priority=(
+                                new_priority
+                            ),
+
+                            confirmed_results=(
+                                confirmed_results
+                            ),
+
+                            criterion_settings=(
+                                criterion_settings
+                            ),
+
+                            qualitative_comparison_results=(
+                                ai_comparison_results
+                            )
+                        )
+                    )
+
+
+                    st.session_state[
+                        "priority_change_result"
+                    ] = (
+                        priority_change_result
+                    )
+
+
+                    st.session_state[
+                        "priority_change_signature"
+                    ] = (
+                        priority_change_signature
+                    )
+
+
+                # -------------------------------------------------
+                # 현재 조건에 해당하는 결과만 표시
+                # -------------------------------------------------
+
+                current_priority_result_available = (
+                    st.session_state.get(
+                        "priority_change_signature"
+                    )
+                    == priority_change_signature
+
+                    and
+
+                    "priority_change_result"
+                    in st.session_state
+                )
+
+
+                if current_priority_result_available:
+
+                    priority_result = (
+                        st.session_state[
+                            "priority_change_result"
                         ]
                     )
 
-                    if analysis[
-                        "strengths"
-                    ]
 
-                    else "-"
+                    if not priority_result.get(
+                        "available",
+                        False
+                    ):
+
+                        st.info(
+                            priority_result.get(
+                                "reason",
+                                "현재 조건에서는 분석하기 어렵습니다."
+                            )
+                        )
+
+
+                    else:
+
+                        priority_change = (
+                            priority_result.get(
+                                "priority_change"
+                            )
+                        )
+
+
+                        strength_candidates = (
+                            priority_result.get(
+                                "strength_candidates",
+                                []
+                            )
+                        )
+
+
+                        weakness_candidates = (
+                            priority_result.get(
+                                "weakness_candidates",
+                                []
+                            )
+                        )
+
+
+                        insufficient_candidates = (
+                            priority_result.get(
+                                "insufficient_candidates",
+                                []
+                            )
+                        )
+
+
+                        # =========================================
+                        # 중요도 높임
+                        # =========================================
+
+                        if (
+                            priority_change
+                            == "importance_increases"
+                        ):
+
+                            st.markdown(
+                                f"**{selected_priority_criterion} "
+                                f"중요도 높임 · "
+                                f"{current_priority} → "
+                                f"{int(new_priority)}순위**"
+                            )
+
+
+                            if weakness_candidates:
+
+                                st.markdown(
+                                    f"- **{', '.join(weakness_candidates)}** · "
+                                    f"{selected_priority_criterion} 약점 반영 ↑"
+                                )
+
+
+                            if strength_candidates:
+
+                                st.markdown(
+                                    f"- **{', '.join(strength_candidates)}** · "
+                                    f"{selected_priority_criterion} 강점 반영 ↑"
+                                )
+
+
+                        # =========================================
+                        # 중요도 낮춤
+                        # =========================================
+
+                        elif (
+                            priority_change
+                            == "importance_decreases"
+                        ):
+
+                            st.markdown(
+                                f"**{selected_priority_criterion} "
+                                f"중요도 낮춤 · "
+                                f"{current_priority} → "
+                                f"{int(new_priority)}순위**"
+                            )
+
+
+                            if weakness_candidates:
+
+                                st.markdown(
+                                    f"- **{', '.join(weakness_candidates)}** · "
+                                    f"{selected_priority_criterion} "
+                                    "약점 반영 ↓"
+                                )
+
+
+                            if strength_candidates:
+
+                                st.markdown(
+                                    f"- **{', '.join(strength_candidates)}** · "
+                                    f"{selected_priority_criterion} "
+                                    "강점 반영 ↓"
+                                )
+
+
+                        # =========================================
+                        # 변화 없음
+                        # =========================================
+
+                        else:
+
+                            st.info(
+                                "현재 우선순위와 동일합니다."
+                            )
+
+
+                        if insufficient_candidates:
+
+                            st.caption(
+                                "비교 근거 부족 · "
+                                + ", ".join(
+                                    insufficient_candidates
+                                )
+                            )
+
+
+            else:
+
+                st.info(
+                    "중요도 변화 분석이 가능한 판단항목이 없습니다."
                 )
 
 
-                weaknesses_text = (
-                    ", ".join(
-                        analysis[
-                            "weaknesses"
+            st.markdown(
+                "<div style='height: 20px;'></div>",
+                unsafe_allow_html=True
+            )
+
+
+            # =====================================================
+            # 2. 필수 기준값 변화
+            # =====================================================
+
+            st.markdown(
+                "#### 2. 필수 기준값 변화"
+            )
+
+            st.caption(
+                "현재 저장된 기준은 바꾸지 않고, "
+                "가상의 기준값에서 후보별 충족 여부가 "
+                "어떻게 달라지는지 확인합니다."
+            )
+
+
+            # -----------------------------------------------------
+            # 분석 가능한 숫자형 필수 기준
+            # -----------------------------------------------------
+
+            threshold_change_criteria = [
+                criterion
+
+                for criterion, setting
+                in criterion_settings.items()
+
+                if (
+                    setting.get("role")
+                    == "필수 기준"
+
+                    and
+
+                    setting.get("data_type")
+                    in [
+                        "numeric",
+                        "ranking"
+                    ]
+
+                    and
+
+                    setting.get(
+                        "constraint_operator"
+                    )
+                    is not None
+
+                    and
+
+                    setting.get(
+                        "constraint_value"
+                    )
+                    is not None
+                )
+            ]
+
+
+            if threshold_change_criteria:
+
+                (
+                    threshold_criterion_col,
+                    threshold_operator_col,
+                    threshold_value_col,
+                    threshold_button_col
+                ) = st.columns(
+                    [2.3, 1, 1.5, 1.2],
+                    vertical_alignment="bottom"
+                )
+
+
+                selected_threshold_criterion = (
+                    threshold_criterion_col.selectbox(
+                        "필수 기준",
+                        threshold_change_criteria,
+                        key="threshold_change_criterion"
+                    )
+                )
+
+
+                threshold_setting = (
+                    criterion_settings[
+                        selected_threshold_criterion
+                    ]
+                )
+
+
+                current_threshold_operator = (
+                    threshold_setting.get(
+                        "constraint_operator"
+                    )
+                    or "≤"
+                )
+
+
+                current_threshold_value = float(
+                    threshold_setting.get(
+                        "constraint_value"
+                    )
+                )
+
+
+                threshold_operator_options = [
+                    "≤",
+                    "≥",
+                    "="
+                ]
+
+
+                new_threshold_operator = (
+                    threshold_operator_col.selectbox(
+                        "가상 조건",
+                        threshold_operator_options,
+                        index=(
+                            threshold_operator_options.index(
+                                current_threshold_operator
+                            )
+                        ),
+                        key=(
+                            f"threshold_change_operator_"
+                            f"{selected_threshold_criterion}"
+                        )
+                    )
+                )
+
+
+                new_threshold_value = (
+                    threshold_value_col.number_input(
+                        "가상 기준값",
+                        value=current_threshold_value,
+                        key=(
+                            f"threshold_change_value_"
+                            f"{selected_threshold_criterion}"
+                        )
+                    )
+                )
+
+
+                # -------------------------------------------------
+                # 현재 분석 조건 Signature
+                # -------------------------------------------------
+
+                threshold_change_signature = (
+                    selected_threshold_criterion,
+
+                    current_threshold_operator,
+
+                    current_threshold_value,
+
+                    new_threshold_operator,
+
+                    float(
+                        new_threshold_value
+                    ),
+
+                    comparison_signature
+                )
+
+
+                # -------------------------------------------------
+                # 기준값 변화 분석 실행
+                # -------------------------------------------------
+
+                if threshold_button_col.button(
+                    "변화 확인",
+                    key="run_threshold_change_analysis",
+                    use_container_width=True
+                ):
+
+                    threshold_change_result = (
+                        analyze_threshold_change(
+                            criterion=(
+                                selected_threshold_criterion
+                            ),
+
+                            new_operator=(
+                                new_threshold_operator
+                            ),
+
+                            new_standard=(
+                                new_threshold_value
+                            ),
+
+                            confirmed_results=(
+                                confirmed_results
+                            ),
+
+                            criterion_settings=(
+                                criterion_settings
+                            )
+                        )
+                    )
+
+
+                    st.session_state[
+                        "threshold_change_result"
+                    ] = (
+                        threshold_change_result
+                    )
+
+
+                    st.session_state[
+                        "threshold_change_signature"
+                    ] = (
+                        threshold_change_signature
+                    )
+
+
+                # -------------------------------------------------
+                # 현재 가정과 일치하는 결과만 표시
+                # -------------------------------------------------
+
+                current_threshold_result_available = (
+                    st.session_state.get(
+                        "threshold_change_signature"
+                    )
+                    == threshold_change_signature
+
+                    and
+
+                    "threshold_change_result"
+                    in st.session_state
+                )
+
+
+                if current_threshold_result_available:
+
+                    threshold_result = (
+                        st.session_state[
+                            "threshold_change_result"
                         ]
                     )
 
-                    if analysis[
-                        "weaknesses"
-                    ]
 
-                    else "-"
+                    if not threshold_result.get(
+                        "available",
+                        False
+                    ):
+
+                        st.info(
+                            threshold_result.get(
+                                "reason",
+                                "현재 조건에서는 분석하기 어렵습니다."
+                            )
+                        )
+
+
+                    else:
+
+                        unit = (
+                            threshold_result.get(
+                                "unit"
+                            )
+                            or ""
+                        )
+
+
+                        current_standard = (
+                            threshold_result.get(
+                                "current_standard"
+                            )
+                        )
+
+
+                        if (
+                            isinstance(
+                                current_standard,
+                                float
+                            )
+                            and
+                            current_standard.is_integer()
+                        ):
+
+                            current_standard = int(
+                                current_standard
+                            )
+
+
+                        displayed_new_standard = float(
+                            new_threshold_value
+                        )
+
+
+                        if (
+                            displayed_new_standard.is_integer()
+                        ):
+
+                            displayed_new_standard = int(
+                                displayed_new_standard
+                            )
+
+
+                        st.markdown(
+                            f"**{selected_threshold_criterion} 기준 변경 · "
+                            f"{current_threshold_operator} "
+                            f"{current_standard}{unit} "
+                            f"→ "
+                            f"{new_threshold_operator} "
+                            f"{displayed_new_standard}{unit}**"
+                        )
+
+
+                        transition_labels = {
+                            "stays_satisfied": (
+                                "충족 유지"
+                            ),
+
+                            "stays_unmet": (
+                                "미충족 유지"
+                            ),
+
+                            "becomes_satisfied": (
+                                "미충족 → 충족"
+                            ),
+
+                            "becomes_unmet": (
+                                "충족 → 미충족"
+                            )
+                        }
+
+
+                        candidate_changes = (
+                            threshold_result.get(
+                                "candidate_changes",
+                                []
+                            )
+                        )
+
+
+                        if candidate_changes:
+
+                            for change in (
+                                candidate_changes
+                            ):
+
+                                candidate = (
+                                    change.get(
+                                        "candidate",
+                                        "-"
+                                    )
+                                )
+
+
+                                actual_value = (
+                                    change.get(
+                                        "actual_value"
+                                    )
+                                )
+
+
+                                if (
+                                    isinstance(
+                                        actual_value,
+                                        float
+                                    )
+                                    and
+                                    actual_value.is_integer()
+                                ):
+
+                                    actual_value = int(
+                                        actual_value
+                                    )
+
+
+                                transition = (
+                                    transition_labels.get(
+                                        change.get(
+                                            "transition"
+                                        ),
+                                        "-"
+                                    )
+                                )
+
+
+                                st.markdown(
+                                    f"- **{candidate}** · "
+                                    f"{actual_value}{unit} · "
+                                    f"{transition}"
+                                )
+
+
+                        else:
+
+                            st.info(
+                                "비교 가능한 후보의 정량 정보가 없습니다."
+                            )
+
+
+                        ambiguous_candidates = (
+                            threshold_result.get(
+                                "ambiguous_candidates",
+                                []
+                            )
+                        )
+
+
+                        if ambiguous_candidates:
+
+                            st.caption(
+                                "판단 보류 · 동일 후보에 여러 값이 있거나 "
+                                "숫자로 해석할 수 없는 정보: "
+                                + ", ".join(
+                                    ambiguous_candidates
+                                )
+                            )
+
+
+            else:
+
+                st.info(
+                    "수치 기준 변화 분석이 가능한 필수 기준이 없습니다."
                 )
 
 
-                insufficient_text = (
-                    ", ".join(
-                        analysis[
-                            "insufficient"
-                        ]
+            st.markdown(
+                "<div style='height: 24px;'></div>",
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+
+            # =====================================================
+            # 3. 상황 변화 시나리오
+            # =====================================================
+
+            st.markdown(
+                "#### 3. 상황 변화 시나리오"
+            )
+
+            st.caption(
+                "사용환경, 고객, 개발상황처럼 숫자로 직접 계산하기 어려운 "
+                "조건 변화는 LLM이 확정된 근거와 연결해 해석합니다."
+            )
+
+            # =====================================================
+            # 사용자 시나리오 입력
+            # =====================================================
+
+            scenario_text = (
+                st.text_area(
+                    "상황 변화",
+                    placeholder=(
+                        "예: 혹한 지역 판매 비중이 낮아진다면?\n"
+                        "예: 젊은 고객보다 법인 고객 비중이 높아진다면?\n"
+                        "예: 개발 일정이 더 촉박해진다면?"
+                    ),
+                    key="scenario_impact_input",
+                    height=110
+                )
+            )
+
+
+            # =====================================================
+            # 현재 분석 대상 상태 Signature
+            # =====================================================
+            #
+            # 시나리오 / Evidence / 판단기준 /
+            # 정성 비교 결과가 바뀌면
+            # 이전 분석을 다시 사용하지 않는다.
+            # =====================================================
+
+            scenario_impact_signature = (
+
+                str(
+                    scenario_text
+                ).strip(),
+
+                comparison_signature,
+
+                tuple(
+                    sorted(
+                        (
+                            str(
+                                criterion
+                            ),
+
+                            str(
+                                setting.get(
+                                    "role",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "priority",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                setting.get(
+                                    "direction",
+                                    ""
+                                )
+                            )
+                        )
+
+                        for criterion, setting
+                        in criterion_settings.items()
+                    )
+                ),
+
+                tuple(
+                    sorted(
+                        (
+                            str(
+                                comparison.get(
+                                    "candidate",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "criterion",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "position",
+                                    ""
+                                )
+                            ),
+
+                            str(
+                                comparison.get(
+                                    "reason",
+                                    ""
+                                )
+                            )
+                        )
+
+                        for comparison
+                        in ai_comparison_results
+                    )
+                )
+            )
+
+
+            stored_scenario_signature = (
+                st.session_state.get(
+                    "scenario_impact_signature"
+                )
+            )
+
+
+            has_scenario_result = (
+                "scenario_impact_result"
+                in st.session_state
+            )
+
+
+            current_scenario_result_available = (
+                has_scenario_result
+
+                and
+
+                stored_scenario_signature
+                == scenario_impact_signature
+            )
+
+
+            # =====================================================
+            # 분석 실행 버튼
+            # =====================================================
+
+            if st.button(
+                "변화 영향 분석",
+                type="primary",
+                key="run_scenario_impact_analysis",
+                disabled=(
+                    not scenario_text.strip()
+                )
+            ):
+
+                try:
+
+                    with st.spinner(
+                        "변화된 조건이 기존 판단근거에 "
+                        "어떤 영향을 주는지 분석하고 있습니다..."
+                    ):
+
+                        scenario_impact_result = (
+                            analyze_scenario_impact(
+                                scenario=(
+                                    scenario_text
+                                ),
+                                confirmed_results=(
+                                    confirmed_results
+                                ),
+                                criterion_settings=(
+                                    criterion_settings
+                                ),
+                                qualitative_comparison_results=(
+                                    ai_comparison_results
+                                )
+                            )
+                        )
+
+
+                    st.session_state[
+                        "scenario_impact_result"
+                    ] = (
+                        scenario_impact_result
                     )
 
-                    if analysis[
-                        "insufficient"
-                    ]
 
-                    else "-"
-                )
-
-
-                risks_text = (
-                    " / ".join(
-                        analysis[
-                            "risks"
-                        ]
+                    st.session_state[
+                        "scenario_impact_signature"
+                    ] = (
+                        scenario_impact_signature
                     )
 
-                    if analysis[
-                        "risks"
-                    ]
 
-                    else "없음"
+                    current_scenario_result_available = (
+                        True
+                    )
+
+
+                    st.success(
+                        "판단조건 변화 분석이 완료되었습니다."
+                    )
+
+
+                except Exception as e:
+
+                    st.error(
+                        "판단조건 변화 분석 중 "
+                        "오류가 발생했습니다."
+                    )
+
+                    st.write(
+                        e
+                    )
+
+
+            # =====================================================
+            # 이전 결과가 현재 조건과 다른 경우
+            # =====================================================
+
+            elif (
+                has_scenario_result
+
+                and
+
+                stored_scenario_signature
+                != scenario_impact_signature
+            ):
+
+                st.caption(
+                    "상황 조건이나 판단근거가 변경되었습니다. "
+                    "다시 분석하면 변경된 조건을 반영합니다."
                 )
 
 
-                analysis_rows.append(
-                    {
-                        "후보": candidate,
+            # =====================================================
+            # 결과 표시
+            # =====================================================
 
-                        "상대적 강점": (
-                            strengths_text
+            if (
+                current_scenario_result_available
+            ):
+
+                scenario_impact_result = (
+                    st.session_state.get(
+                        "scenario_impact_result",
+                        {}
+                    )
+                )
+
+
+                affected_criteria = (
+                    scenario_impact_result.get(
+                        "affected_criteria",
+                        []
+                    )
+                )
+
+
+                impacts = (
+                    scenario_impact_result.get(
+                        "impacts",
+                        []
+                    )
+                )
+
+
+                st.markdown(
+                    "<div style='height: 18px;'></div>",
+                    unsafe_allow_html=True
+                )
+
+
+                # =============================================
+                # 영향받는 판단항목
+                # =============================================
+
+                if affected_criteria:
+
+                    st.markdown(
+                        "**영향받는 판단항목**"
+                    )
+
+                    st.write(
+                        " / ".join(
+                            affected_criteria
+                        )
+                    )
+
+
+                else:
+
+                    st.info(
+                        "현재 확정된 정보만으로는 "
+                        "이 조건 변화의 영향을 명확히 판단하기 어렵습니다."
+                    )
+
+
+                # =============================================
+                # 후보별 영향
+                # =============================================
+
+                if impacts:
+
+                    impact_label_map = {
+                        "importance_increases": (
+                            "판단 영향 증가"
                         ),
 
-                        "상대적 약점": (
-                            weaknesses_text
+                        "importance_decreases": (
+                            "판단 영향 감소"
                         ),
 
-                        "정보 부족": (
-                            insufficient_text
+                        "mixed": (
+                            "복합 영향"
                         ),
 
-                        "기준 미충족": (
-                            risks_text
+                        "uncertain": (
+                            "영향 불확실"
                         )
                     }
-                )
 
 
-            analysis_df = pd.DataFrame(
-                analysis_rows
-            )
+                    st.markdown(
+                        "<div style='height: 12px;'></div>",
+                        unsafe_allow_html=True
+                    )
 
 
-            st.dataframe(
-                analysis_df,
-                use_container_width=True,
-                hide_index=True
-            )
+                    for candidate in (
+                        candidate_names
+                    ):
 
+                        candidate_impacts = [
+                            impact
+
+                            for impact
+                            in impacts
+
+                            if (
+                                impact.get(
+                                    "candidate"
+                                )
+                                == candidate
+                            )
+                        ]
+
+
+                        if not candidate_impacts:
+
+                            continue
+
+
+                        with st.container(
+                            border=True
+                        ):
+
+                            st.markdown(
+                                f"#### {candidate}"
+                            )
+
+
+                            for impact in (
+                                candidate_impacts
+                            ):
+
+                                criterion = (
+                                    impact.get(
+                                        "criterion",
+                                        "-"
+                                    )
+                                )
+
+
+                                impact_type = (
+                                    impact.get(
+                                        "impact",
+                                        "uncertain"
+                                    )
+                                )
+
+
+                                impact_label = (
+                                    impact_label_map.get(
+                                        impact_type,
+                                        impact_type
+                                    )
+                                )
+
+
+                                text = (
+                                    impact.get(
+                                        "text",
+                                        ""
+                                    )
+                                )
+
+
+                                st.markdown(
+                                    f"**{criterion} · "
+                                    f"{impact_label}**"
+                                )
+
+                                st.write(
+                                    text
+                                )
 
             # =====================================================
             # 5. AI 문장형 정성 비교 근거
